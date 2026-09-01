@@ -1,0 +1,28 @@
+[project]
+name = "vault-backend"
+version = "1.0.0"
+description = "FastAPI + MongoDB backend for a personal Obsidian-like markdown vault"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "motor==3.6.0",
+    "pydantic==2.9.2",
+    "pydantic[email]==2.9.2",
+    "python-dotenv==1.0.1",
+    "python-multipart==0.0.9",
+    "pyjwt==2.9.0",
+    "bcrypt==4.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
