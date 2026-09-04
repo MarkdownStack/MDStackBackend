@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..database import folders_collection, notes_collection
 from ..dependencies import get_current_user
-from ..models import FolderCreate
+from ..models import FolderCreate, now_iso
 from ..utils import normalize_folder_path
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
@@ -31,8 +31,9 @@ async def create_folder(payload: FolderCreate, current_user: dict = Depends(get_
     existing = await folders_collection.find_one({"path": path, "owner_id": owner_id})
     if existing:
         raise HTTPException(status_code=409, detail="Folder already exists")
-    await folders_collection.insert_one({"path": path, "owner_id": owner_id})
-    return {"path": path}
+    ts = now_iso()
+    await folders_collection.insert_one({"path": path, "owner_id": owner_id, "created_at": ts, "updated_at": ts})
+    return {"path": path, "created_at": ts, "updated_at": ts}
 
 
 @router.delete("/{path:path}", status_code=204)

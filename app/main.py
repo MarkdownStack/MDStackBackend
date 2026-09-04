@@ -4,13 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from .database import ensure_indexes
-from .routers import auth, notes, folders, search, graph, tags
+from .routers import auth, notes, folders, search, tags, upload, public
 
 load_dotenv()
 
-app = FastAPI(title="Vault API", description="A personal Obsidian-like markdown vault", version="1.0.0")
+app = FastAPI(title="MarkdownStack API", description="A personal Obsidian-like markdown vault", version="1.0.0")
 
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,8 +24,9 @@ app.include_router(auth.router)
 app.include_router(notes.router)
 app.include_router(folders.router)
 app.include_router(search.router)
-app.include_router(graph.router)
 app.include_router(tags.router)
+app.include_router(upload.router)
+app.include_router(public.router)
 
 
 @app.on_event("startup")

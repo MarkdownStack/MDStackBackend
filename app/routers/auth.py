@@ -21,9 +21,10 @@ async def register(payload: UserCreate):
         "email": email,
         "password_hash": hash_password(payload.password),
         "created_at": ts,
+        "updated_at": ts,
     }
     result = await users_collection.insert_one(doc)
-    return UserOut(id=str(result.inserted_id), email=email, created_at=ts)
+    return UserOut(id=str(result.inserted_id), email=email, created_at=ts, updated_at=ts)
 
 
 @router.post("/login", response_model=Token)
@@ -44,8 +45,15 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 
 @router.get("/me", response_model=UserOut)
 async def read_current_user(current_user: dict = Depends(get_current_user)):
+    # The one endpoint that actually needs more than the user's id —
+    # get_current_user no longer fetches the full document itself (see its
+    # docstring), so this fetches it explicitly, just for this rarer call.
+    user = await users_collection.find_one({"_id": current_user["_id"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     return UserOut(
-        id=str(current_user["_id"]),
-        email=current_user["email"],
-        created_at=current_user.get("created_at", ""),
+        id=str(user["_id"]),
+        email=user["email"],
+        created_at=user.get("created_at", ""),
+        updated_at=user.get("updated_at", user.get("created_at", "")),
     )
