@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Once you're publishing this image too, you can swap the build: block
+    # above for:
+    # image: parimalmahindrakar/tracemymoney_backend:latest
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    networks:
+      - app-network
+    # No host port published — nginx is the only public entrypoint.
+    # Uncomment to hit the API directly (e.g. while debugging):
+    # ports:
+    #   - "5000:5000"
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    # Or use the image you've already published instead of building locally:
+    # image: parimalmahindrakar/tracemymoney_nginx:latest
+    container_name: mdstack_nginx_server
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/etc/ssl/certs/tm_keys:/etc/ssl/certs/tm_keys"
+      - "/etc/ssl/certs/rm_keys:/etc/ssl/certs/rm_keys"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

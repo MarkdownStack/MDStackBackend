@@ -49,7 +49,7 @@ The backend ships a multi-stage `Dockerfile` (uv-based builder → slim non-root
    ```bash
    docker run -d \
      --name markdownstack-backend \
-     -p 8000:8000 \
+     -p 5000:5000 \
      -e MONGO_URL="mongodb://host.docker.internal:27017" \
      -e DB_NAME="vault" \
      -e JWT_SECRET_KEY="change-this-to-a-long-random-string" \
@@ -62,12 +62,12 @@ The backend ships a multi-stage `Dockerfile` (uv-based builder → slim non-root
 
 4. **Verify it's up**:
    ```bash
-   curl http://localhost:8000/api/health
+   curl http://localhost:5000/api/health
    # {"status":"ok"}
    ```
    The image also has a built-in `HEALTHCHECK` hitting the same endpoint every 30s, so `docker ps` will show `(healthy)`/`(unhealthy)` once it settles.
 
-5. API docs: http://localhost:8000/docs
+5. API docs: http://localhost:5000/docs
 
 To rebuild after code changes: `docker build -t markdownstack-backend .` again (the Dockerfile's layer order means dependency installs are cached and only your app code re-copies, so rebuilds are fast).
 
@@ -90,10 +90,10 @@ Then:
 cd backend
 cp .env.example .env        # fill in MONGO_URL / JWT_SECRET_KEY etc.
 uv sync                     # installs the exact locked dependencies into .venv
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 5000
 ```
 
-API docs: http://localhost:8000/docs
+API docs: http://localhost:5000/docs
 
 Useful `uv` commands:
 ```bash
@@ -112,10 +112,30 @@ python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e .
 cp .env.example .env             # fill in MONGO_URL / JWT_SECRET_KEY etc.
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 5000
 ```
 
 Note this won't pin the exact versions in `uv.lock` — it resolves against the version ranges in `pyproject.toml` instead. Prefer `uv` (B1) if you want a reproducible install.
+
+---
+
+## Option C — docker-compose (API + nginx, using Atlas for Mongo)
+
+`backend/docker-compose.yml` wires up this API (as `backend`) and the reverse proxy in `nginx/` on a shared `app-network`, matching what `nginx.conf`'s upstream (`backend:5000`) expects. There's no `mongo` service here — set `MONGO_URL` in `.env` to your Atlas connection string, same as in Options A/B.
+
+From the `backend/` directory:
+```bash
+cd backend
+cp .env.example .env   # fill in MONGO_URL (your Atlas URI), JWT_SECRET_KEY, etc.
+docker compose up --build -d
+```
+
+This builds the API and nginx images locally from their Dockerfiles. The API isn't published to the host directly (nginx is the only public entrypoint on 80/443) — uncomment the `ports:` block under `backend` in `docker-compose.yml` if you want to hit port 5000 directly while debugging.
+
+```bash
+docker compose logs -f backend   # tail one service's logs
+docker compose down              # stop everything
+```
 
 ---
 

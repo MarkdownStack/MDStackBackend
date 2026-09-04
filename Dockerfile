@@ -64,12 +64,12 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # .env.example for the full list this app reads at startup.
 USER appuser
 
-EXPOSE 8000
+EXPOSE 5000
 
 # Hits the app's own /api/health route (see app/main.py) using Python's
 # stdlib instead of curl, so the runtime image doesn't need curl installed
 # just for this one check.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5000"]
