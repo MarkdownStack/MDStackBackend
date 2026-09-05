@@ -89,7 +89,7 @@ jobs:
           # Path to the git clone of THIS repo on the EC2 box — the one
           # containing docker-compose.yml and nginx/. Adjust if yours lives
           # somewhere else.
-          DEPLOY_DIR="~/apps/backend"
+          DEPLOY_DIR="~/MDStackBackend"
 
           # -v added temporarily for auth debugging — shows exactly which
           # key(s) were offered and why the server accepted/rejected each
@@ -102,14 +102,15 @@ jobs:
             git fetch origin master
             git reset --hard origin/master
 
-            echo "Pulling latest production backend image..."
-            docker compose pull backend
-
-            echo "Rebuilding nginx (it's built locally from ./nginx, not pulled)..."
-            docker compose build nginx
-
-            echo "Starting updated containers..."
-            docker compose up -d --remove-orphans
+            # --pull always: re-pulls the "backend" image every time, even
+            # though it's already cached locally (plain "up -d" only pulls
+            # an image the FIRST time it's missing, then reuses the stale
+            # cache forever).
+            # --build: rebuilds "nginx" from the just-synced ./nginx source
+            # every time, for the same reason — it's build:, not image:, so
+            # "up -d" alone would never notice nginx.conf changed.
+            echo "Pulling latest backend image + rebuilding nginx + starting..."
+            docker compose up -d --remove-orphans --pull always --build
 
             echo "Cleaning up old dangling images (keeps EC2 disk from filling up)..."
             docker image prune -f
