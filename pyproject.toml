@@ -15,6 +15,23 @@ dependencies = [
     "bcrypt==4.2.0",
 ]
 
+# Kept separate from the core app deps above: the MCP server (mcp_server/)
+# is a plain HTTP client of this API (see mcp_server/client.py), not part of
+# the FastAPI app itself, so it doesn't need to touch the app's own locked
+# dependency set to be installed. `uv sync --extra mcp` (or `uv run --extra
+# mcp ...`) pulls these in on top of the base deps.
+#
+# Deliberately the standalone `fastmcp` package (jlowin/PrefectHQ, "FastMCP
+# 2.0"), not the official low-level `mcp` SDK's bundled copy: that copy was
+# renamed FastMCP -> MCPServer (and moved modules) in the SDK's own v2.0, so
+# pinning to the standalone package sidesteps that churn. Upper-bounded to
+# stay clear of its next major too.
+[project.optional-dependencies]
+mcp = [
+    "fastmcp>=2.0,<3",
+    "httpx>=0.27.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
@@ -25,4 +42,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["app", "mcp_server"]
