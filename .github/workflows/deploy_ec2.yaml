@@ -1,0 +1,118 @@
+name: CI/CD - Build, Push & Deploy
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # This project is managed with uv (pyproject.toml + uv.lock), not
+      # requirements.txt/pip — there's no requirements.txt in this repo, so
+      # the old "pip install -r requirements.txt" step here failed outright.
+      # Dependency installs already happen inside the Dockerfile's own build
+      # stage (uv sync), so nothing needs installing on the runner itself
+      # unless/until we're running tests here too (see below).
+
+      # - name: Start MongoDB
+      #   uses: supercharge/mongodb-github-action@1.12.0
+      #   with:
+      #     mongodb-version: '8'
+      #     mongodb-root-username: admin
+      #     mongodb-root-password: ${{ secrets.MONGO_PASSWORD }}
+
+      # - name: Install uv
+      #   uses: astral-sh/setup-uv@v3
+
+      # - name: Run pytest
+      #   run: uv run pytest
+
+      - name: Set Version
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          VERSION="${{ github.ref_name }}_${SHORT_SHA}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Docker Image
+        run: |
+          docker build -t parimalmahindrakar/mdstack_backend:${{ env.VERSION }} .
+
+      - name: Push Branch Image
+        run: |
+          docker push parimalmahindrakar/mdstack_backend:${{ env.VERSION }}
+
+      - name: Tag & Push latest (master only)
+        if: github.ref_name == 'master'
+        run: |
+          docker tag parimalmahindrakar/mdstack_backend:${{ env.VERSION }} \
+                     parimalmahindrakar/mdstack_backend:latest
+          docker push parimalmahindrakar/mdstack_backend:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-test-push
+    if: github.ref_name == 'master'
+
+    steps:
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+
+      # TEMPORARY DEBUG STEP — remove once the publickey error is fixed.
+      # Prints the fingerprint of whatever key the agent actually loaded
+      # from the EC2_SSH_PRIVATE_KEY secret. Compare this fingerprint
+      # against the one on the server (see the ssh-keygen -lf command in
+      # chat) to prove definitively whether the secret matches what's
+      # authorized there.
+      - name: Debug - show loaded key fingerprint
+        run: ssh-add -l
+
+      - name: Deploy to EC2
+        run: |
+          # Path to the git clone of THIS repo on the EC2 box — the one
+          # containing docker-compose.yml and nginx/. Adjust if yours lives
+          # somewhere else.
+          DEPLOY_DIR="~/apps/backend"
+
+          # -v added temporarily for auth debugging — shows exactly which
+          # key(s) were offered and why the server accepted/rejected each
+          # one. Remove once this is working.
+          ssh -v -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} << EOF
+            set -e
+            cd $DEPLOY_DIR
+
+            echo "Syncing docker-compose.yml / nginx config from git..."
+            git fetch origin master
+            git reset --hard origin/master
+
+            echo "Pulling latest production backend image..."
+            docker compose pull backend
+
+            echo "Rebuilding nginx (it's built locally from ./nginx, not pulled)..."
+            docker compose build nginx
+
+            echo "Starting updated containers..."
+            docker compose up -d --remove-orphans
+
+            echo "Cleaning up old dangling images (keeps EC2 disk from filling up)..."
+            docker image prune -f
+
+            echo "Deployment completed successfully!"
+          EOF

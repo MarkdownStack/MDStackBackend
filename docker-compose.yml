@@ -1,11 +1,13 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # Once you're publishing this image too, you can swap the build: block
-    # above for:
-    # image: parimalmahindrakar/tracemymoney_backend:latest
+    image: parimalmahindrakar/mdstack_backend:latest
+    # Built and pushed by .github/workflows/deploy_ec2.yaml on every push to
+    # master — this box only ever pulls the pre-built image, it never builds
+    # it locally (that's what was eating all the disk space before). If you
+    # need to build it here yourself instead, swap the line above for:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: backend
     restart: unless-stopped
     env_file:

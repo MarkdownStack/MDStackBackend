@@ -137,6 +137,13 @@ docker compose logs -f backend   # tail one service's logs
 docker compose down              # stop everything
 ```
 
+### Production deploys (CI/CD)
+
+`.github/workflows/deploy_ec2.yaml` builds and pushes `parimalmahindrakar/mdstack_backend` to Docker Hub on every push to `master`, then SSHes into the EC2 host and runs `git pull` + `docker compose pull backend` + `docker compose build nginx` + `docker compose up -d` there. That means:
+- The production `backend/docker-compose.yml` on EC2 pulls the pre-built image (`image: parimalmahindrakar/mdstack_backend:latest`) instead of building it — the EC2 box never runs a heavy Docker build for the API, which is what filled its disk before.
+- `nginx` still builds locally on the EC2 box from `nginx/` (small, cheap build) — its image isn't published to Docker Hub yet.
+- The EC2 deploy directory needs to be an actual git clone of this repo so `git pull` picks up changes to `docker-compose.yml`/`nginx/`, not just new backend code.
+
 ---
 
 ## Running MongoDB locally (for either option)
