@@ -19,6 +19,42 @@ services:
     # ports:
     #   - "5000:5000"
 
+  mcp:
+    # Built locally on this box (like nginx below), NOT pulled from Docker
+    # Hub like backend — there's no CI job pushing an mdstack_mcp image yet.
+    # If you want that later, mirror backend's build-test-push job in
+    # .github/workflows/deploy_ec2.yaml and swap this for an `image:` line.
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    container_name: mdstack_mcp
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      # Talks to `backend` over this compose network's own DNS — not
+      # localhost, which inside this container means itself, not the
+      # backend container.
+      - MDSTACK_API_BASE_URL=http://backend:5000
+      - MDSTACK_MCP_TRANSPORT=http
+      - MDSTACK_MCP_HOST=0.0.0.0
+      - MDSTACK_MCP_PORT=8090
+      - MDSTACK_MCP_PATH=/mcp
+      # MDSTACK_MCP_TOKEN (the bearer token remote clients must send) and
+      # either MDSTACK_ACCESS_TOKEN or MDSTACK_EMAIL+MDSTACK_PASSWORD (so
+      # the vault tools work without an interactive auth_login call every
+      # time) belong in ./.env — see .env.example — not here, since this
+      # file is committed and those are secrets.
+    depends_on:
+      - backend
+    networks:
+      - app-network
+    # No host port published — same reasoning as backend: nginx (below) is
+    # the only public entrypoint, proxying /mcp to this container internally.
+    # Uncomment to hit it directly while debugging:
+    # ports:
+    #   - "8090:8090"
+
   nginx:
     build:
       context: ./nginx
@@ -35,6 +71,7 @@ services:
       - "/etc/ssl/certs/rm_keys:/etc/ssl/certs/rm_keys"
     depends_on:
       - backend
+      - mcp
     networks:
       - app-network
 

@@ -20,12 +20,25 @@ either way.
 
 Two ways to run this, both supported (see the try/except import just below):
     - As a package: `python -m mcp_server.server` (cwd=backend/) — what the
-      Claude Desktop config in mcp_server/README.md uses.
+      Claude Desktop config in mcp_server/README.md uses, and what the
+      Docker image (mcp_server/Dockerfile) runs.
     - As a standalone script: `fastmcp run mcp_server/server.py` / `fastmcp
       dev mcp_server/server.py` / `fastmcp install claude-desktop
       mcp_server/server.py` — the fastmcp CLI always executes the target
       file directly rather than importing it as part of a package, which
       breaks a plain `from .client import ...`.
+
+Transport (env-driven, see MDSTACK_MCP_TRANSPORT below): defaults to stdio
+— a local subprocess Claude Desktop spawns and pipes to directly, which is
+all a single laptop needs. Set it to "http" to instead run as a persistent
+Streamable HTTP service on a port (see mcp_server/README.md's "Deploying to
+EC2" section) — that's what turns this into something a *remote* box can
+host, reachable over the network by multiple clients instead of spawned
+fresh per client. HTTP mode is guarded by a static bearer token
+(MDSTACK_MCP_TOKEN) whenever one is set: stdio has no equivalent need for
+this (only your own machine can ever spawn that subprocess in the first
+place), but a network-reachable HTTP endpoint sitting in front of your vault
+absolutely does.
 
 Environment variables:
     MDSTACK_API_BASE_URL   Base URL of the running backend (default: http://localhost:5000)
@@ -34,6 +47,15 @@ Environment variables:
     MDSTACK_PASSWORD       )  auth-requiring call, if MDSTACK_ACCESS_TOKEN isn't set
     MDSTACK_EXPORT_DIR     Directory export_vault() writes the downloaded .zip
                            into (default: current working directory)
+    MDSTACK_MCP_TRANSPORT  "stdio" (default) or "http". Only "http" reads the
+                           four vars below.
+    MDSTACK_MCP_HOST       Bind address in http mode (default: 0.0.0.0)
+    MDSTACK_MCP_PORT       Bind port in http mode (default: 8090)
+    MDSTACK_MCP_PATH       URL path the MCP endpoint is served at (default: /mcp)
+    MDSTACK_MCP_TOKEN      Shared-secret bearer token required of every caller
+                           in http mode. Strongly recommended for anything
+                           reachable off localhost — see README. Ignored
+                           entirely in stdio mode.
 
 Not covered: /api/upload (bulk file import). That endpoint takes raw
 multipart file uploads shaped around a browser's directory picker
@@ -53,7 +75,23 @@ try:
 except ImportError:
     from client import MarkdownStackClient  # script mode: fastmcp run/dev/install mcp_server/server.py
 
-mcp = FastMCP("markdownstack")
+
+def _build_auth():
+    """Only meaningful for HTTP transport — stdio has no network exposure to
+    guard against, so this is skipped entirely there (see run() below).
+    A single shared static token is deliberately the whole auth model here:
+    this server has exactly one intended caller (whoever you hand the token
+    to — your own Claude Desktop/Claude.ai connector), not a multi-tenant
+    audience needing real OAuth/user-level scopes."""
+    token = os.getenv("MDSTACK_MCP_TOKEN")
+    if not token:
+        return None
+    from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+
+    return StaticTokenVerifier(tokens={token: {"scopes": ["mcp"]}}, required_scopes=["mcp"])
+
+
+mcp = FastMCP("markdownstack", auth=_build_auth())
 client = MarkdownStackClient()
 
 
@@ -270,7 +308,12 @@ async def export_vault(folder_paths: Optional[list[str]] = None, export_all: boo
     later via the web app's upload feature. Pass export_all=True for the
     whole vault, or folder_paths=["projects/alpha", "journal"] for a subset
     (each entry pulls in that folder, its notes, and everything nested
-    under it). Returns the local file path the zip was written to."""
+    under it). Returns the local file path the zip was written to.
+
+    Note: in http/remote mode (see module docstring), "local" means on the
+    machine actually running this MCP server (e.g. your EC2 box), not on
+    whatever machine the MCP client itself is on — there's no file transfer
+    back to the client built into this tool."""
     if not export_all and not folder_paths:
         raise ValueError('Pass export_all=True, or at least one path in folder_paths.')
     payload = {"folder_paths": folder_paths or [], "all": export_all}
@@ -285,5 +328,18 @@ async def export_vault(folder_paths: Optional[list[str]] = None, export_all: boo
     return {"path": out_path, "filename": filename, "size_bytes": len(content)}
 
 
+def run() -> None:
+    transport = os.getenv("MDSTACK_MCP_TRANSPORT", "stdio")
+    if transport == "stdio":
+        mcp.run()
+        return
+    mcp.run(
+        transport=transport,  # "http" (Streamable HTTP) or "sse"
+        host=os.getenv("MDSTACK_MCP_HOST", "0.0.0.0"),
+        port=int(os.getenv("MDSTACK_MCP_PORT", "8090")),
+        path=os.getenv("MDSTACK_MCP_PATH", "/mcp"),
+    )
+
+
 if __name__ == "__main__":
-    mcp.run()
+    run()
