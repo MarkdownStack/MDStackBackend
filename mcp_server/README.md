@@ -9,12 +9,11 @@ API the React frontend uses.
 It's a plain HTTP client of a **running backend** (see `client.py`) — it does
 not talk to MongoDB directly. Start the FastAPI app first.
 
-## Which "FastMCP"?
+## Which "FastMCP"? (and a version gotcha worth knowing)
 
 This uses the **standalone `fastmcp` package** (`pip install fastmcp` —
 originally jlowin's project, now under PrefectHQ; often called "FastMCP
-2.0"), not the official low-level `mcp` SDK's bundled copy. Some history,
-since it's genuinely confusing:
+2.0"), not the official low-level `mcp` SDK's bundled copy. Some history:
 
 - FastMCP 1.0 was folded into the official MCP Python SDK in 2024 as
   `mcp.server.fastmcp.FastMCP`.
@@ -22,18 +21,67 @@ since it's genuinely confusing:
   it's grown well past the bare spec (a client library, auth providers,
   server composition/proxying, OpenAPI-to-MCP generation, testing tools) and
   is the actively-maintained, de facto standard today.
-- As of the SDK's own v2.0 (2026), the bundled copy was **renamed** `FastMCP`
-  → `MCPServer` and moved modules (`mcp.server.fastmcp` no longer exists in
-  `mcp>=2.0`). So pinning to the official SDK's old class name would've been
-  one `uv sync` away from an import error the moment that shipped.
+- As of the official SDK's own v2.0 (2026), *its* bundled copy was
+  **renamed** `FastMCP` → `MCPServer` and moved modules — so pinning to that
+  copy's old class name would've been one `uv sync` away from an import
+  error.
 
-Net effect: `pyproject.toml`'s `mcp` extra pins `fastmcp>=2.0,<3` (plus
-`httpx`), and `server.py` does `from fastmcp import FastMCP`. The decorator
-API (`@mcp.tool()`, `mcp.run()`) is identical either way, so if you ever *do*
-want the official SDK's `MCPServer` instead, the tool bodies below barely
-change — just the import line and constructor name.
+**The gotcha, hit for real on this project:** "FastMCP 2.0" is the name for
+this standalone project's *lineage*, not a literal version number frozen at
+`2.x` — its own SemVer has since moved past 2.x into 3.x (4.x is in beta as
+of writing). That matters because the calling convention for `host`/`port`
+changed along the way:
 
-## Install
+| | fastmcp 2.x | fastmcp 3.x |
+|---|---|---|
+| Set host/port via | `FastMCP("name", host=..., port=...)` (constructor) | `mcp.run(transport="http", host=..., port=...)` (run()) |
+| `run()`'s `transport` values | `"stdio"` or `"sse"` only — no `"http"` at all | `"stdio"`, `"http"`, `"sse"` |
+
+`server.py` uses the 3.x style. The original pin here was `fastmcp>=2.0,<3`
+— which resolved (and got deployed to EC2) as **2.2.0**, confirmed by
+running inside the container:
+```python
+>>> import inspect
+>>> inspect.signature(FastMCP.run)
+(self, transport: Optional[Literal['stdio', 'sse']] = None, **transport_kwargs: Any) -> None
+```
+No `"http"` transport, and `host`/`port` passed as `transport_kwargs` land
+on `run_sse_async` (only meaningful for `"sse"`) rather than actually being
+honored the way `server.py` expects — which is why the deployed server came
+up on `127.0.0.1:8000` (2.x's bare `ServerSettings` defaults) instead of
+`0.0.0.0:8090`, and nginx got a 502 (nothing reachable at `mcp:8090`).
+
+Fixed by repinning to `fastmcp>=3.0,<4` — deliberately not left open past
+`4` either, since that's still beta; bump on purpose later, after reading
+fastmcp's own upgrade guide, not by accident.
+
+**Whenever you touch this pin, two files must change together, or the fix
+does nothing:**
+1. `pyproject.toml`'s `mcp` extra (the pin itself)
+2. `uv.lock` — run `uv lock -P fastmcp` (not just edit the pin and stop)
+   and commit the result. The Docker build uses `uv sync --frozen`, which
+   installs exactly what `uv.lock` says regardless of what the pin in
+   `pyproject.toml` allows — editing #1 without regenerating #2 is exactly
+   how this project ended up running 2.2.0 in production despite the pin
+   saying otherwise.
+
+If you ever hit a similar `TypeError` on `run()` or `FastMCP()` again,
+that's almost always what's happening — check the *actually installed*
+version (`docker exec <container> python -c "import fastmcp;
+print(fastmcp.__version__)"`), not just what the pin claims to allow.
+
+## Two ways to run this
+
+- **stdio** (default, `MDSTACK_MCP_TRANSPORT` unset): a local subprocess
+  Claude Desktop spawns and pipes to directly. This is what "Install /
+  test locally" below covers.
+- **HTTP** (`MDSTACK_MCP_TRANSPORT=http`): a persistent Streamable HTTP
+  service on a port, reachable over the network by multiple clients at
+  once instead of spawned fresh per client. This is what "Deploying to
+  EC2" below covers — it's the only way to host this somewhere other than
+  your own laptop.
+
+## Install / test locally (stdio)
 
 From `backend/`:
 
@@ -41,11 +89,11 @@ From `backend/`:
 uv sync --extra mcp
 ```
 
-This installs `fastmcp` and `httpx` on top of the app's existing locked
-dependencies, without touching `app/`'s own dependency set (see the comment
-in `pyproject.toml`).
-
-## Configure
+If `pyproject.toml`'s `mcp` extra ever changes (like the pin fix above),
+`uv.lock` needs regenerating too — `uv lock -P fastmcp` (or `uv sync --extra
+mcp` without `--frozen`) does this and rewrites `uv.lock`; commit that file
+alongside the `pyproject.toml` change. See the warning above — skipping this
+step is exactly what caused the production incident this section documents.
 
 Environment variables (all optional except you need *some* way to
 authenticate for the write/private tools):
@@ -62,7 +110,14 @@ published notes, voting, `health_check`, etc.) work immediately, and you can
 call the `auth_login` tool at any point during the conversation to unlock the
 rest.
 
-## Run it directly (for testing)
+Smoke-test with the MCP Inspector before wiring up any client:
+
+```bash
+cd backend
+uv run --extra mcp fastmcp dev mcp_server/server.py
+```
+
+Run it directly:
 
 ```bash
 cd backend
@@ -74,9 +129,12 @@ it hangs — that's expected. Point an actual MCP client at it instead. (The
 `fastmcp` package also ships a `fastmcp run mcp_server/server.py` CLI if you
 prefer that over `python -m`; both work identically here.)
 
-## Register with Claude Desktop
+### Register with Claude Desktop (local, stdio)
 
-Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
+Add to `claude_desktop_config.json` (Settings → Developer → Edit Config,
+or `~/Library/Application Support/Claude/claude_desktop_config.json` on
+macOS) — as a sibling key of whatever else is already in the file, e.g.
+alongside `preferences`, not nested inside it:
 
 ```json
 {
@@ -106,6 +164,85 @@ Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
 Restart Claude Desktop afterwards. The same `command`/`args`/`env` shape
 works for Claude Code's MCP config.
 
+## Deploying to EC2 (remote, HTTP)
+
+This runs as its own container (`mcp` service in `docker-compose.yml`),
+alongside `backend` and `nginx`, on the same `app-network`. Not pulled from
+Docker Hub like `backend` — it's built locally on the box, the same way
+`nginx` already is (there's no CI job publishing an `mdstack_mcp` image
+yet; add one to `.github/workflows/deploy_ec2.yaml`, mirroring
+`build-test-push`, if you want that later).
+
+**1. Generate a real bearer token** (this replaces "only my laptop can
+spawn this process" — the one thing implicitly protecting stdio mode —
+now that it's reachable over the network):
+
+```bash
+openssl rand -hex 32
+```
+
+**2. Fill in `backend/.env` on the EC2 box** (see `.env.example`):
+
+```bash
+MDSTACK_MCP_TOKEN=<the token you just generated>
+# Pick ONE way for the tools to act as your vault without an interactive
+# auth_login call every session:
+MDSTACK_EMAIL=you@example.com
+MDSTACK_PASSWORD=your-password
+```
+
+**3. Deploy** — same flow the existing CI/CD already uses (`git pull` +
+`docker compose up -d --build`), since `mcp`'s `build:` context means the
+`--build` flag rebuilds it from whatever's just been pulled, same as
+`nginx`. If you're doing it by hand instead:
+
+```bash
+cd ~/MDStackBackend   # wherever this repo is cloned on the EC2 box
+git pull
+docker compose up -d --remove-orphans --pull always --build
+```
+
+If `uv.lock`'s `fastmcp` entry changed (see the version-gotcha section
+above), add `--no-cache` to the build to be extra sure a stale layer isn't
+reused: `docker compose build --no-cache mcp && docker compose up -d mcp`.
+
+**4. Verify** — from the EC2 box itself first (bypassing nginx/TLS, to
+isolate whether the container itself is healthy):
+```bash
+docker compose ps mcp          # should show "healthy"
+docker compose logs -f mcp     # watch for startup errors — look for
+                                # "Uvicorn running on http://0.0.0.0:8090",
+                                # NOT 127.0.0.1:8000 (see gotcha above)
+docker exec $(docker compose ps -q mcp) python -c "import fastmcp; print(fastmcp.__version__)"
+                                # should print something starting with "3."
+```
+Then from anywhere, through nginx:
+```bash
+curl -i https://api.stalk-my-money.in/mcp
+# Expect a 4xx from the MCP protocol layer (this isn't a plain REST GET),
+# NOT a connection error / 502 — that's enough to confirm the whole chain
+# (DNS → nginx → mcp container) is wired up correctly.
+```
+
+**5. Add it as a remote connector.** This is a different config shape than
+the local stdio one above — it's a URL + a bearer token, not a spawned
+command. In Claude Desktop/Claude.ai: **Settings → Connectors → Add
+connector**, enter:
+- URL: `https://api.stalk-my-money.in/mcp`
+- Auth: Bearer token → the value you generated in step 1
+
+### Security notes
+
+- `MDSTACK_MCP_TOKEN` is the *only* thing standing between the internet and
+  write access to your vault once this is live — treat it like any other
+  production secret (not committed, rotated if it ever leaks).
+- The token check is a single shared static secret (`StaticTokenVerifier`),
+  not per-user OAuth — appropriate for "exactly one trusted caller: me",
+  not for handing out to other people.
+- Everything still rides on the same TLS termination and certs nginx
+  already has for the REST API — no new cert/DNS record needed since this
+  is exposed as a path (`/mcp`) on the same domain, not a new subdomain.
+
 ## Tools
 
 - **Health**: `health_check`
@@ -117,7 +254,9 @@ works for Claude Code's MCP config.
 - **Search/tags**: `search_notes`, `list_tags`, `notes_with_tag`
 - **Public/Explore**: `explore_public_notes`, `get_public_note`,
   `vote_public_note`, `list_comments`, `create_comment`, `upvote_comment`
-- **Export**: `export_vault` (writes a `.zip` to `MDSTACK_EXPORT_DIR`)
+- **Export**: `export_vault` (writes a `.zip` to `MDSTACK_EXPORT_DIR` — in
+  http/remote mode, that's on the EC2 box's own disk, not your laptop; see
+  the tool's own docstring)
 
 ## Not covered
 
@@ -129,8 +268,11 @@ importer for a whole folder tree.
 
 ## A note on auth model
 
-Each tool call reuses one in-memory token for the life of this server
-process (it's a single long-running stdio process per MCP client session,
-not one process per call) — there's no per-call user switching. If you need
-to act as a different account mid-conversation, just call `auth_login` again
-with the new credentials.
+Each tool call reuses one in-memory MarkdownStack session (the JWT from
+`auth_login`/`MDSTACK_ACCESS_TOKEN`/`MDSTACK_EMAIL`+`MDSTACK_PASSWORD`) for
+the life of this server process — in stdio mode that's one process per
+Claude Desktop session; in http mode it's one long-running container shared
+by every connection, so every caller acts as the same MarkdownStack account
+(whichever one `.env` logs in as). There's no per-caller user switching in
+http mode — this is built for "one person's vault, hosted remotely," not a
+multi-tenant service.

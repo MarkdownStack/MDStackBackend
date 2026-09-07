@@ -5,13 +5,27 @@ description = "FastAPI + MongoDB backend for a personal Obsidian-like markdown v
 requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.115.0",
-    "uvicorn[standard]==0.30.6",
+    # >=0.30.6 (was an exact ==0.30.6 pin) so a single uv.lock can also
+    # satisfy the mcp extra below: fastmcp>=3.0 transitively requires
+    # uvicorn>=0.35, and an exact pin here made that unsatisfiable together
+    # (uv resolves one lockfile covering base deps + every optional group).
+    # No known FastAPI 0.115 incompatibility with newer uvicorn 0.3x.
+    "uvicorn[standard]>=0.30.6,<1.0",
     "motor==3.6.0",
-    "pydantic==2.9.2",
-    "pydantic[email]==2.9.2",
-    "python-dotenv==1.0.1",
-    "python-multipart==0.0.9",
-    "pyjwt==2.9.0",
+    # >=2.9.2 (was exact ==2.9.2 on both lines) — same reasoning as the
+    # uvicorn/python-dotenv relaxes above: fastmcp requires
+    # pydantic[email]>=2.11.7. FastAPI 0.115 is fine with newer pydantic 2.x.
+    "pydantic>=2.9.2,<3.0",
+    "pydantic[email]>=2.9.2,<3.0",
+    # >=1.0.1 (was exact ==1.0.1) — same reasoning as the uvicorn relax
+    # above: some fastmcp>=3.0 branches require python-dotenv>=1.1.0.
+    "python-dotenv>=1.0.1,<2.0",
+    # >=0.0.9 (was exact ==0.0.9) — same reasoning as the other relaxes
+    # above: fastmcp requires python-multipart>=0.0.26.
+    "python-multipart>=0.0.9,<1.0",
+    # >=2.9.0 (was exact ==2.9.0) — fastmcp's own `mcp` dependency requires
+    # pyjwt[crypto]>=2.10.1.
+    "pyjwt>=2.9.0,<3.0",
     "bcrypt==4.2.0",
 ]
 
@@ -21,14 +35,38 @@ dependencies = [
 # dependency set to be installed. `uv sync --extra mcp` (or `uv run --extra
 # mcp ...`) pulls these in on top of the base deps.
 #
-# Deliberately the standalone `fastmcp` package (jlowin/PrefectHQ, "FastMCP
-# 2.0"), not the official low-level `mcp` SDK's bundled copy: that copy was
-# renamed FastMCP -> MCPServer (and moved modules) in the SDK's own v2.0, so
-# pinning to the standalone package sidesteps that churn. Upper-bounded to
-# stay clear of its next major too.
+# Deliberately the standalone `fastmcp` package (jlowin/PrefectHQ — as
+# opposed to the official low-level `mcp` SDK's own bundled copy, which was
+# renamed FastMCP -> MCPServer in the SDK's v2.0 — see mcp_server/README.md
+# for the full history).
+#
+# Pin note, and why it's NOT "<3" even though this package is colloquially
+# still called "FastMCP 2.0": that name refers to this standalone project's
+# *lineage* (vs. the one folded into the official SDK), not its literal
+# version number — its own SemVer has since moved past 2.x into 3.x (4.x is
+# in beta as of writing). host/port moved from FastMCP()'s constructor
+# kwargs (2.x) to run()'s kwargs (3.x) along the way — mcp_server/server.py
+# uses the 3.x calling style, so pinning to "<3" installs an old release
+# whose run() genuinely doesn't accept host, which is exactly the
+# `TypeError: run() got an unexpected keyword argument 'host'` this project
+# hit (confirmed on EC2: <3 resolved all the way down to 2.2.0, whose run()
+# signature is literally `run(transport: Literal["stdio","sse"]|None, **kw)`
+# — no "http" transport, no real host/port support at all). Pinned to the
+# 3.x line specifically (not left open past 4) so a future 4.0 stable
+# release doesn't silently reintroduce a similar surprise — bump
+# deliberately, re-reading its own upgrade guide first, when that's
+# actually wanted.
+#
+# IMPORTANT: changing this line alone does NOT change what gets installed.
+# `uv.lock` is a separate, checked-in file that pins the actually-resolved
+# version, and the Docker build runs `uv sync --frozen`, which installs
+# exactly what uv.lock says regardless of what this pin allows. After
+# editing this pin, always run `uv lock` (plain — no --extra/-P needed,
+# a lockfile always covers every optional-dependency group by design)
+# and commit the resulting uv.lock change too, or this fix does nothing.
 [project.optional-dependencies]
 mcp = [
-    "fastmcp>=2.0,<3",
+    "fastmcp>=3.0,<4",
     "httpx>=0.27.0",
 ]
 
