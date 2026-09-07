@@ -30,6 +30,9 @@ async def ensure_indexes():
     await notes_collection.create_index([("is_public", 1), ("upvotes", -1)])
 
     await folders_collection.create_index([("owner_id", 1), ("path", 1)], unique=True)
+    # Powers list_my_published_folders' owner_id + is_public filter, mirroring
+    # the equivalent index on notes above.
+    await folders_collection.create_index([("owner_id", 1), ("is_public", 1)])
 
     # Powers both the per-note comment list (chronological) and any
     # future "top comments" sort by upvotes.

@@ -1,13 +1,26 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import ReturnDocument
 from typing import List
 
-from ..database import notes_collection, comments_collection
+from ..database import notes_collection, comments_collection, folders_collection
 from ..dependencies import get_current_user, get_current_user_optional
-from ..models import PublicNoteOut, PublicNoteSummary, CommentCreate, CommentOut, VoteUpdate, now_iso
-from ..utils import excerpt, authors_by_owner_id, comment_counts
+from ..models import (
+    PublicNoteOut,
+    PublicNoteSummary,
+    PublicFolderOut,
+    PublicFolderSummary,
+    PublicFolderNoteSummary,
+    PublicFolderNoteOut,
+    CommentCreate,
+    CommentOut,
+    VoteUpdate,
+    now_iso,
+)
+from ..utils import excerpt, authors_by_owner_id, comment_counts, folder_scope_pattern
 
 # Reading is public everywhere in this file — no auth dependency on any GET,
 # and a note's own is_public flag (checked explicitly in every query below)
@@ -192,3 +205,138 @@ async def upvote_comment(note_id: str, comment_id: str):
         raise HTTPException(status_code=404, detail="Comment not found")
     authors = await authors_by_owner_id({updated.get("owner_id", "")})
     return serialize_comment(updated, authors.get(updated.get("owner_id", ""), "Someone"))
+
+
+# ---- Published folders (whole-directory publish, not just a single note) --
+# The folder-level counterpart to everything above: reachable at
+# /p/folder/:id with no login, the same way a published note is reachable
+# at /p/:id. A note showing up here depends only on living inside a
+# published folder's subtree at *read* time — never on the note's own
+# `is_public` flag, and never cached onto the note itself — so a folder
+# being unpublished, or a note being moved out from under it, takes effect
+# immediately rather than needing any note-level cleanup.
+
+
+async def get_public_folder_doc(folder_id: str) -> dict:
+    """Mirrors get_public_note_doc above: 404s (never 403) whether the
+    folder doesn't exist, isn't published, or folder_id isn't a valid
+    ObjectId at all, so an unpublished folder looks identical to a
+    nonexistent one from the outside."""
+    try:
+        folder_oid = ObjectId(folder_id)
+    except InvalidId:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    doc = await folders_collection.find_one({"_id": folder_oid, "is_public": True})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return doc
+
+
+@router.get("/folders", response_model=List[PublicFolderSummary])
+async def list_public_folders(limit: int = 100, current_user: dict | None = Depends(get_current_user_optional)):
+    """Every folder across every vault that's been published as a whole —
+    the folder-level counterpart to list_public_notes above, powering the
+    logged-in Explore feed and the logged-out front page's "published
+    folders" listing. Sorted by most-recently-updated, since a folder
+    (unlike a note) has no upvote count of its own to rank by. Same
+    owner-exclusion rule as notes: a logged-in caller doesn't see their own
+    published folders here — that's what the sidebar's own globe badges are
+    for."""
+    limit = max(1, min(limit, 200))
+    query = {"is_public": True}
+    if current_user:
+        query["owner_id"] = {"$ne": str(current_user["_id"])}
+    cursor = folders_collection.find(query).sort("updated_at", -1).limit(limit)
+    docs = [doc async for doc in cursor]
+
+    owner_ids = {doc["owner_id"] for doc in docs if doc.get("owner_id")}
+    authors = await authors_by_owner_id(owner_ids)
+
+    summaries = []
+    for doc in docs:
+        path = doc["path"]
+        count = await notes_collection.count_documents(
+            {"owner_id": doc.get("owner_id", ""), "folder_path": {"$regex": folder_scope_pattern(path)}}
+        )
+        summaries.append(
+            PublicFolderSummary(
+                id=str(doc["_id"]),
+                name=path.split("/")[-1],
+                path=path,
+                author=authors.get(doc.get("owner_id", ""), "Someone"),
+                note_count=count,
+                updated_at=doc.get("updated_at", ""),
+            )
+        )
+    return summaries
+
+
+@router.get("/folders/{folder_id}", response_model=PublicFolderOut)
+async def get_public_folder(folder_id: str):
+    """Read-only listing of every note inside a published folder, and any
+    subfolders under it — enough (title, excerpt, tags) to populate a
+    navigation sidebar without pulling every note's full body over the wire
+    up front. Full content for any one note comes from
+    get_public_folder_note below, fetched on demand as the reader clicks
+    around."""
+    doc = await get_public_folder_doc(folder_id)
+    owner_id = doc["owner_id"]
+    path = doc["path"]
+    cursor = notes_collection.find(
+        {"owner_id": owner_id, "folder_path": {"$regex": folder_scope_pattern(path)}}
+    ).sort([("folder_path", 1), ("title", 1)])
+    notes = [n async for n in cursor]
+
+    authors = await authors_by_owner_id({owner_id})
+    author = authors.get(owner_id, "Someone")
+
+    return PublicFolderOut(
+        id=str(doc["_id"]),
+        name=path.split("/")[-1],
+        path=path,
+        author=author,
+        notes=[
+            PublicFolderNoteSummary(
+                id=str(n["_id"]),
+                title=n["title"],
+                folder_path=n.get("folder_path", ""),
+                excerpt=excerpt(n.get("content", "")),
+                tags=n.get("tags", []),
+                updated_at=n.get("updated_at", ""),
+            )
+            for n in notes
+        ],
+        updated_at=doc.get("updated_at", ""),
+    )
+
+
+@router.get("/folders/{folder_id}/notes/{note_id}", response_model=PublicFolderNoteOut)
+async def get_public_folder_note(folder_id: str, note_id: str):
+    """A single note's full content, scoped to a published folder rather
+    than the note's own `is_public` flag — see the module comment above.
+    Re-validates the note actually lives inside the published folder's
+    subtree on *every* call (not just once, at listing time), so an
+    unpublished sibling folder, the folder being unpublished, or the note
+    being moved out from under it in between a reader loading the sidebar
+    and clicking a note can't be read through a stale link."""
+    doc = await get_public_folder_doc(folder_id)
+    owner_id = doc["owner_id"]
+    path = doc["path"]
+    try:
+        note_oid = ObjectId(note_id)
+    except InvalidId:
+        raise HTTPException(status_code=404, detail="Note not found")
+    note = await notes_collection.find_one({"_id": note_oid, "owner_id": owner_id})
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    folder_path = note.get("folder_path", "")
+    if not re.match(folder_scope_pattern(path), folder_path):
+        raise HTTPException(status_code=404, detail="Note not found")
+    return PublicFolderNoteOut(
+        id=str(note["_id"]),
+        title=note["title"],
+        content=note.get("content", ""),
+        folder_path=folder_path,
+        tags=note.get("tags", []),
+        updated_at=note.get("updated_at", ""),
+    )

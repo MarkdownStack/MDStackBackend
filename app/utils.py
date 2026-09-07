@@ -39,6 +39,18 @@ def normalize_folder_path(path: str) -> str:
     return "/".join(parts)
 
 
+def folder_scope_pattern(path: str) -> str:
+    """Anchored + escaped 'this folder or anything nested under it' regex,
+    matching `path` itself and `path/...` but never an unrelated sibling
+    that merely starts with the same characters (e.g. "notes" must not also
+    match "notes-archive"). Shared by every place that needs to scope a
+    query to a folder's whole subtree: the recursive folder-delete and the
+    published-folder note-count/listing endpoints (routers/folders.py,
+    routers/public.py) all use this exact pattern, rather than each
+    reimplementing (and risking drifting from) their own version of it."""
+    return f"^{re.escape(path)}(/.*)?$"
+
+
 _MD_STRIP_RE = re.compile(r"[`*_#>\[\]()~-]")
 _WS_RE = re.compile(r"\s+")
 

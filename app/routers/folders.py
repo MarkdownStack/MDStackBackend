@@ -1,11 +1,12 @@
-import re
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from pymongo import ReturnDocument
 
 from ..database import folders_collection, notes_collection
 from ..dependencies import get_current_user
-from ..models import FolderCreate, now_iso
-from ..utils import normalize_folder_path
+from ..models import FolderCreate, FolderOut, FolderPublishUpdate, PublicFolderSummary, now_iso
+from ..utils import normalize_folder_path, folder_scope_pattern, authors_by_owner_id
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
 
@@ -55,7 +56,7 @@ async def delete_folder(path: str, current_user: dict = Depends(get_current_user
     # (The old version of this check used an unescaped, unanchored prefix
     # regex, which is also what used to let an unrelated sibling wrongly
     # block a delete in the first place.)
-    pattern = f"^{re.escape(path)}(/.*)?$"
+    pattern = folder_scope_pattern(path)
     folder_scope = {"owner_id": owner_id, "path": {"$regex": pattern}}
     note_scope = {"owner_id": owner_id, "folder_path": {"$regex": pattern}}
 
@@ -77,3 +78,81 @@ async def delete_folder(path: str, current_user: dict = Depends(get_current_user
         "deleted_notes": notes_result.deleted_count,
         "deleted_folders": folders_result.deleted_count,
     }
+
+
+@router.get("/published/mine", response_model=List[PublicFolderSummary])
+async def list_my_published_folders(current_user: dict = Depends(get_current_user)):
+    """Every folder this user has published, in the same card shape
+    (PublicFolderSummary) as the anonymous Explore feed's "published
+    folders" listing — backs both the sidebar's globe badge/toggle state
+    (which only needs `path`/`id`) and "My published notes"'s own "My
+    published folders" section (which needs the rest: `name`, `note_count`,
+    `updated_at`), the same way MyPublishedNotes already reuses
+    PublicNoteSummary's shape for its own notes grid."""
+    owner_id = str(current_user["_id"])
+    cursor = folders_collection.find({"owner_id": owner_id, "is_public": True}).sort("updated_at", -1)
+    docs = [doc async for doc in cursor]
+
+    authors = await authors_by_owner_id({owner_id})
+    author = authors.get(owner_id, "Someone")
+
+    summaries = []
+    for doc in docs:
+        path = doc["path"]
+        count = await notes_collection.count_documents(
+            {"owner_id": owner_id, "folder_path": {"$regex": folder_scope_pattern(path)}}
+        )
+        summaries.append(
+            PublicFolderSummary(
+                id=str(doc["_id"]),
+                name=path.split("/")[-1],
+                path=path,
+                author=author,
+                note_count=count,
+                updated_at=doc.get("updated_at", ""),
+            )
+        )
+    return summaries
+
+
+@router.put("/{path:path}/publish", response_model=FolderOut)
+async def set_folder_publish(
+    path: str, payload: FolderPublishUpdate, current_user: dict = Depends(get_current_user)
+):
+    """Folder-level publish: toggles a whole folder — and every note nested
+    under it, at any depth — visible at a no-login-required URL, the same
+    idea as a note's own Publish toggle in NoteEditor but one level up.
+    Deliberately independent of any individual note's `is_public` flag:
+    publishing a folder doesn't touch the notes inside it, so unpublishing
+    the folder later can't accidentally leave a note dangling public
+    elsewhere (e.g. still listed in Explore), and vice versa — see
+    routers/public.py's get_public_folder for how a note's visibility here
+    is resolved purely from the folder's own published subtree at read
+    time, not from any flag stored on the note itself.
+
+    A folder doc doesn't always exist yet (see list_folders' explicit-vs-
+    implied comment above — a folder can be "real" purely because a note's
+    folder_path points at it), so this upserts one rather than requiring
+    create_folder to have been called first.
+    """
+    owner_id = str(current_user["_id"])
+    path = normalize_folder_path(path)
+    if not path:
+        raise HTTPException(status_code=400, detail="Cannot publish the vault root")
+    ts = now_iso()
+    doc = await folders_collection.find_one_and_update(
+        {"path": path, "owner_id": owner_id},
+        {
+            "$set": {"is_public": payload.is_public, "updated_at": ts},
+            "$setOnInsert": {"path": path, "owner_id": owner_id, "created_at": ts},
+        },
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return FolderOut(
+        id=str(doc["_id"]),
+        path=doc["path"],
+        is_public=doc.get("is_public", False),
+        created_at=doc.get("created_at", ts),
+        updated_at=doc.get("updated_at", ts),
+    )
