@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URL = os.getenv("MONGO_URL", "mongodb+srv://testclaude4653_db_user:imVI4AhRh7hpthxl@cluster0.otuleco.mongodb.net/?appName=Cluster0")
-DB_NAME = os.getenv("DB_NAME", "vault")
+MONGO_URL = os.getenv("MONGO_URL", "http:localhost:27017/")
+DB_NAME = os.getenv("DB_NAME", "test_db")
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
