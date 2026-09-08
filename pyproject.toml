@@ -27,6 +27,10 @@ dependencies = [
     # pyjwt[crypto]>=2.10.1.
     "pyjwt>=2.9.0,<3.0",
     "bcrypt==4.2.0",
+    # Mailgun's HTTP API for sending the signup verification email
+    # (app/email.py) — already an mcp-extra dep below for mcp_server's own
+    # REST client, promoted to a base dep now that the core app needs it too.
+    "httpx>=0.27.0,<1.0",
 ]
 
 # Kept separate from the core app deps above: the MCP server (mcp_server/)
@@ -67,6 +71,9 @@ dependencies = [
 [project.optional-dependencies]
 mcp = [
     "fastmcp>=3.0,<4",
+    # httpx itself now lives in the base deps above (app/email.py uses it
+    # too) — kept listed here as well since this extra's own README /
+    # install instructions reference it directly.
     "httpx>=0.27.0",
 ]
 

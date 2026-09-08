@@ -22,6 +22,7 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     id: str
     email: str
+    is_verified: bool = False
     created_at: str
     updated_at: str
 
@@ -29,6 +30,21 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# ---- Email verification ------------------------------------------------
+# Registering creates the account immediately but leaves is_verified=False
+# on the user document until the link Mailgun sends (see app/email.py) is
+# clicked — /api/auth/login refuses unverified accounts (403, not 401,
+# since the credentials themselves were correct) so a signup that never
+# checks their inbox can't silently end up "logged in but unconfirmed".
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+class MessageOut(BaseModel):
+    message: str
 
 
 class NoteCreate(BaseModel):
