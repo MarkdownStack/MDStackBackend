@@ -47,6 +47,24 @@ class MessageOut(BaseModel):
     message: str
 
 
+# ---- Forgot / reset password -------------------------------------------
+# Same shape as email verification (a random token + expiry stored on the
+# user document, emailed as a link) — see routers/auth.py's
+# forgot_password/reset_password and app/email.py's
+# send_password_reset_email. Kept as its own token field
+# (password_reset_token) rather than reusing verification_token so a
+# pending signup-verification link and a pending password-reset link can
+# never collide or invalidate each other on the same account.
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8, max_length=72)
+
+
 class NoteCreate(BaseModel):
     title: str
     content: str = ""

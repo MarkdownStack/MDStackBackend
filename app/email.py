@@ -54,6 +54,30 @@ def _verification_email_html(to_email: str, verify_link: str) -> str:
     """
 
 
+def _password_reset_email_html(to_email: str, reset_link: str) -> str:
+    return f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#2b2b2b;">
+      <h1 style="font-size:20px;margin:0 0 16px;color:#111;">Reset your password</h1>
+      <p style="font-size:14px;line-height:1.6;margin:0 0 24px;color:#555;">
+        We got a request to reset the password for <strong>{to_email}</strong>.
+        This link expires in 1 hour. If you didn't ask for this, you can
+        safely ignore this email — your password won't change.
+      </p>
+      <p style="margin:0 0 24px;">
+        <a href="{reset_link}"
+           style="display:inline-block;background:#d8a657;color:#1a1408;padding:12px 22px;
+                  border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">
+          Reset password
+        </a>
+      </p>
+      <p style="font-size:12px;line-height:1.5;color:#999;margin:0;">
+        Or paste this link into your browser:<br>
+        <a href="{reset_link}" style="color:#999;">{reset_link}</a>
+      </p>
+    </div>
+    """
+
+
 async def send_verification_email(to_email: str, token: str) -> bool:
     """Send the "verify your email" link for `to_email` via Mailgun.
 
@@ -90,3 +114,40 @@ async def send_verification_email(to_email: str, token: str) -> bool:
     except httpx.HTTPError:
         logger.exception("Mailgun send failed for verification email to %s", to_email)
         return False
+
+
+async def send_password_reset_email(to_email: str, token: str) -> bool:
+    """Send the "reset your password" link for `to_email` via Mailgun.
+
+    Same best-effort contract as send_verification_email — returns
+    True/False, never raises, so a Mailgun outage doesn't turn "forgot
+    password" into a 500 for something the user didn't cause.
+    """
+    if not MAILGUN_API_KEY or not MAILGUN_URI or not MAILGUN_FROM_ADDR:
+        logger.warning(
+            "MAILGUN_API_KEY/MAILGUN_URI/MAILGUN_FROM_ADDR not configured — skipping password reset email to %s",
+            to_email,
+        )
+        return False
+
+    reset_link = f"{FRONTEND_BASE_URL}/reset-password?token={token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                MAILGUN_URI,
+                auth=("api", MAILGUN_API_KEY),
+                data={
+                    "from": MAILGUN_FROM_EMAIL,
+                    "to": to_email,
+                    "subject": "Reset your MarkdownStack password",
+                    "html": _password_reset_email_html(to_email, reset_link),
+                    "text": f"Reset your MarkdownStack password: {reset_link}",
+                },
+            )
+            response.raise_for_status()
+            return True
+    except httpx.HTTPError:
+        logger.exception("Mailgun send failed for password reset email to %s", to_email)
+        return False
+

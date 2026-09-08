@@ -22,6 +22,9 @@ async def ensure_indexes():
     # $unset on success — see routers/auth.py), so this only indexes the
     # subset still pending, which is also the only subset ever looked up by it.
     await users_collection.create_index("verification_token", unique=True, sparse=True)
+    # Same reasoning, for the separate forgot-password token (see
+    # routers/auth.py's forgot_password/reset_password).
+    await users_collection.create_index("password_reset_token", unique=True, sparse=True)
 
     # Full text search across title + content
     await notes_collection.create_index([("title", "text"), ("content", "text")])

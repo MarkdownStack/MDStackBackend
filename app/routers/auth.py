@@ -7,8 +7,17 @@ from fastapi.security import OAuth2PasswordRequestForm
 from ..auth import create_access_token, hash_password, verify_password
 from ..database import users_collection
 from ..dependencies import get_current_user
-from ..email import send_verification_email
-from ..models import MessageOut, ResendVerificationRequest, Token, UserCreate, UserOut, now_iso
+from ..email import send_password_reset_email, send_verification_email
+from ..models import (
+    ForgotPasswordRequest,
+    MessageOut,
+    ResendVerificationRequest,
+    ResetPasswordRequest,
+    Token,
+    UserCreate,
+    UserOut,
+    now_iso,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -16,12 +25,21 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # rejecting it (and the user has to hit "resend" to get a fresh one).
 VERIFICATION_TOKEN_TTL = timedelta(hours=24)
 
+# Deliberately much shorter than the verification token above — a password
+# reset link grants "set this account's password" outright (no old password
+# needed), so a short window matters more here than for email verification.
+PASSWORD_RESET_TOKEN_TTL = timedelta(hours=1)
+
+
+def _new_token(ttl: timedelta) -> tuple[str, str]:
+    """Returns (token, ISO-8601 expiry) for a fresh single-use link."""
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + ttl).isoformat()
+    return token, expires_at
+
 
 def _new_verification_token() -> tuple[str, str]:
-    """Returns (token, ISO-8601 expiry) for a fresh email-verification link."""
-    token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now(timezone.utc) + VERIFICATION_TOKEN_TTL).isoformat()
-    return token, expires_at
+    return _new_token(VERIFICATION_TOKEN_TTL)
 
 
 def _user_out(user: dict) -> UserOut:
@@ -135,6 +153,52 @@ async def resend_verification(payload: ResendVerificationRequest):
     )
     await send_verification_email(email, token)
     return generic
+
+
+@router.post("/forgot-password", response_model=MessageOut)
+async def forgot_password(payload: ForgotPasswordRequest):
+    email = payload.email.lower()
+    user = await users_collection.find_one({"email": email})
+
+    # Same generic response regardless of whether the account exists — see
+    # resend_verification above for why (email-enumeration prevention).
+    generic = MessageOut(message="If that account exists, a password reset link is on its way.")
+
+    if not user:
+        return generic
+
+    token, expires_at = _new_token(PASSWORD_RESET_TOKEN_TTL)
+    await users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"password_reset_token": token, "password_reset_token_expires": expires_at, "updated_at": now_iso()}},
+    )
+    await send_password_reset_email(email, token)
+    return generic
+
+
+@router.post("/reset-password", response_model=MessageOut)
+async def reset_password(payload: ResetPasswordRequest):
+    user = await users_collection.find_one({"password_reset_token": payload.token})
+    if not user:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has already been used.")
+
+    expires_raw = user.get("password_reset_token_expires")
+    if expires_raw and datetime.now(timezone.utc) > datetime.fromisoformat(expires_raw):
+        raise HTTPException(
+            status_code=400,
+            detail="This reset link has expired. Request a new one from the login page.",
+        )
+
+    await users_collection.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {"password_hash": hash_password(payload.password), "updated_at": now_iso()},
+            # Both single-use — a spent (or now-superseded) reset token
+            # must never work again, same as verification_token on success.
+            "$unset": {"password_reset_token": "", "password_reset_token_expires": ""},
+        },
+    )
+    return MessageOut(message="Password reset! You can now log in with your new password.")
 
 
 @router.get("/me", response_model=UserOut)
