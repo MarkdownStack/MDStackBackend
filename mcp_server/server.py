@@ -116,10 +116,13 @@ async def auth_login(email: str, password: str) -> dict:
 
 
 @mcp.tool()
-async def auth_register(email: str, password: str) -> dict:
-    """Create a new MarkdownStack account. Password must be 8-72 characters.
-    Does NOT log in automatically afterwards — call auth_login next."""
-    return await client.register(email, password)
+async def auth_register(username: str, email: str, password: str) -> dict:
+    """Create a new MarkdownStack account. Username: 3-24 characters, letters/
+    numbers/underscores only. Password must be 8-72 characters. The account
+    starts unverified — a verification email is sent, and /api/auth/login
+    (so auth_login too) refuses to issue a token until it's clicked. Does NOT
+    log in automatically afterwards."""
+    return await client.register(username, email, password)
 
 
 @mcp.tool()

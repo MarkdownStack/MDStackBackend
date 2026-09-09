@@ -9,7 +9,14 @@ def now_iso() -> str:
 
 # ---- Auth / Users ----------------------------------------------------
 
+# Letters, numbers, and underscores only — no dots/spaces (keeps it
+# unambiguous as a login identifier alongside an email address, and safe to
+# show as a byline with no further sanitizing).
+USERNAME_PATTERN = r"^[a-zA-Z0-9_]{3,24}$"
+
+
 class UserCreate(BaseModel):
+    username: str = Field(pattern=USERNAME_PATTERN)
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
 
@@ -21,6 +28,7 @@ class UserLogin(BaseModel):
 
 class UserOut(BaseModel):
     id: str
+    username: str = ""
     email: str
     is_verified: bool = False
     created_at: str
@@ -40,7 +48,10 @@ class Token(BaseModel):
 # checks their inbox can't silently end up "logged in but unconfirmed".
 
 class ResendVerificationRequest(BaseModel):
-    email: EmailStr
+    # Email or username — login now accepts either (see routers/auth.py's
+    # login), so "resend my verification email" has to accept whichever one
+    # someone actually remembers signing in with.
+    identifier: str
 
 
 class MessageOut(BaseModel):
@@ -57,7 +68,8 @@ class MessageOut(BaseModel):
 # never collide or invalidate each other on the same account.
 
 class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
+    # Same reasoning as ResendVerificationRequest.identifier above.
+    identifier: str
 
 
 class ResetPasswordRequest(BaseModel):

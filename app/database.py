@@ -18,6 +18,10 @@ comments_collection = db["comments"]
 
 async def ensure_indexes():
     await users_collection.create_index("email", unique=True)
+    # Sparse: accounts created before the username field existed have none —
+    # this only indexes/enforces uniqueness on the subset that do, so old
+    # rows don't collide with each other under a shared "" value.
+    await users_collection.create_index("username", unique=True, sparse=True)
     # Sparse: most users have no verification_token once verified (it's
     # $unset on success — see routers/auth.py), so this only indexes the
     # subset still pending, which is also the only subset ever looked up by it.

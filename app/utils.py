@@ -74,8 +74,10 @@ def excerpt(content: str, length: int = 200) -> str:
 # ---------------------------------------------------------------------------
 
 def derive_author_name(email: str) -> str:
-    """No display-name field on users yet, so the byline is derived from the
-    part of the email before '@' — 'priya.sharma@x.com' -> 'Priya Sharma'."""
+    """Fallback byline for accounts that predate the `username` field —
+    derived from the part of the email before '@',
+    'priya.sharma@x.com' -> 'Priya Sharma'. Once every account has a
+    username (see models.UserCreate), this only ever fires for old rows."""
     local = (email or "").split("@")[0]
     cleaned = local.replace(".", " ").replace("_", " ").replace("-", " ").strip()
     return cleaned.title() if cleaned else "Someone"
@@ -83,7 +85,9 @@ def derive_author_name(email: str) -> str:
 
 async def authors_by_owner_id(owner_ids) -> dict:
     """Batch-resolve owner_id -> display author name in a single query,
-    instead of one users_collection round trip per note in a list."""
+    instead of one users_collection round trip per note in a list. Prefers
+    the account's real username; falls back to derive_author_name for
+    accounts created before that field existed."""
     oid_to_owner_id = {}
     for owner_id in owner_ids:
         try:
@@ -94,11 +98,13 @@ async def authors_by_owner_id(owner_ids) -> dict:
         return {}
 
     result = {}
-    cursor = users_collection.find({"_id": {"$in": list(oid_to_owner_id.keys())}}, {"email": 1})
+    cursor = users_collection.find(
+        {"_id": {"$in": list(oid_to_owner_id.keys())}}, {"email": 1, "username": 1}
+    )
     async for doc in cursor:
         owner_id = oid_to_owner_id.get(doc["_id"])
         if owner_id:
-            result[owner_id] = derive_author_name(doc.get("email", ""))
+            result[owner_id] = doc.get("username") or derive_author_name(doc.get("email", ""))
     return result
 
 

@@ -75,8 +75,10 @@ class MarkdownStackClient:
         self._raise_for_status(response)
         self._token = response.json()["access_token"]
 
-    async def register(self, email: str, password: str) -> dict:
-        response = await self._http.post("/api/auth/register", json={"email": email, "password": password})
+    async def register(self, username: str, email: str, password: str) -> dict:
+        response = await self._http.post(
+            "/api/auth/register", json={"username": username, "email": email, "password": password}
+        )
         self._raise_for_status(response)
         return response.json()
 

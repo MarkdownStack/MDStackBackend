@@ -45,6 +45,7 @@ def _new_verification_token() -> tuple[str, str]:
 def _user_out(user: dict) -> UserOut:
     return UserOut(
         id=str(user["_id"]),
+        username=user.get("username", ""),
         email=user["email"],
         is_verified=user.get("is_verified", False),
         created_at=user.get("created_at", ""),
@@ -52,16 +53,37 @@ def _user_out(user: dict) -> UserOut:
     )
 
 
+async def _find_by_identifier(identifier: str) -> dict | None:
+    """Look a user up by email OR username — both are stored lowercased
+    (see register below), so lowercasing the incoming identifier once here
+    matches either field with a single query. Used by login and by the
+    resend-verification/forgot-password recovery flows, since someone who
+    signed up with a username may not remember (or want to type) their
+    email for those either."""
+    identifier = identifier.strip().lower()
+    if not identifier:
+        return None
+    return await users_collection.find_one({"$or": [{"email": identifier}, {"username": identifier}]})
+
+
 @router.post("/register", response_model=UserOut, status_code=201)
 async def register(payload: UserCreate):
     email = payload.email.lower()
-    existing = await users_collection.find_one({"email": email})
-    if existing:
+    # Lowercased for the same reason email is — keeps "Parimal" and
+    # "parimal" from registering as two different (but visually identical)
+    # login identifiers, and matches how login/_find_by_identifier looks it
+    # up above.
+    username = payload.username.lower()
+
+    if await users_collection.find_one({"email": email}):
         raise HTTPException(status_code=409, detail="Email already registered")
+    if await users_collection.find_one({"username": username}):
+        raise HTTPException(status_code=409, detail="Username already taken")
 
     ts = now_iso()
     token, expires_at = _new_verification_token()
     doc = {
+        "username": username,
         "email": email,
         "password_hash": hash_password(payload.password),
         "is_verified": False,
@@ -83,13 +105,14 @@ async def register(payload: UserCreate):
 
 @router.post("/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    # OAuth2PasswordRequestForm uses "username" as the field name; we treat it as the email.
-    email = form_data.username.lower()
-    user = await users_collection.find_one({"email": email})
+    # OAuth2PasswordRequestForm's field is literally named "username", but
+    # we accept either a real username or an email address through it —
+    # AuthPage.jsx's login field is labeled "Email or username" accordingly.
+    user = await _find_by_identifier(form_data.username)
     if not user or not verify_password(form_data.password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect email/username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -135,12 +158,11 @@ async def verify_email(token: str):
 
 @router.post("/resend-verification", response_model=MessageOut)
 async def resend_verification(payload: ResendVerificationRequest):
-    email = payload.email.lower()
-    user = await users_collection.find_one({"email": email})
+    user = await _find_by_identifier(payload.identifier)
 
     # Identical response whether the account exists, is already verified,
     # or genuinely gets a new email — so this endpoint can't be used to
-    # probe which addresses have an account.
+    # probe which addresses/usernames have an account.
     generic = MessageOut(message="If that account exists and needs verifying, a new link is on its way.")
 
     if not user or user.get("is_verified"):
@@ -151,17 +173,19 @@ async def resend_verification(payload: ResendVerificationRequest):
         {"_id": user["_id"]},
         {"$set": {"verification_token": token, "verification_token_expires": expires_at, "updated_at": now_iso()}},
     )
-    await send_verification_email(email, token)
+    # Always to the account's real email on file — never wherever the
+    # caller's `identifier` happened to point, since that might be a
+    # username rather than an address at all.
+    await send_verification_email(user["email"], token)
     return generic
 
 
 @router.post("/forgot-password", response_model=MessageOut)
 async def forgot_password(payload: ForgotPasswordRequest):
-    email = payload.email.lower()
-    user = await users_collection.find_one({"email": email})
+    user = await _find_by_identifier(payload.identifier)
 
     # Same generic response regardless of whether the account exists — see
-    # resend_verification above for why (email-enumeration prevention).
+    # resend_verification above for why (enumeration prevention).
     generic = MessageOut(message="If that account exists, a password reset link is on its way.")
 
     if not user:
@@ -172,7 +196,7 @@ async def forgot_password(payload: ForgotPasswordRequest):
         {"_id": user["_id"]},
         {"$set": {"password_reset_token": token, "password_reset_token_expires": expires_at, "updated_at": now_iso()}},
     )
-    await send_password_reset_email(email, token)
+    await send_password_reset_email(user["email"], token)
     return generic
 
 
