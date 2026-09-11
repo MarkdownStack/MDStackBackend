@@ -14,6 +14,11 @@ users_collection = db["users"]
 notes_collection = db["notes"]
 folders_collection = db["folders"]
 comments_collection = db["comments"]
+# One doc per UTC calendar day (`_id` is the "YYYY-MM-DD" string itself, so
+# there's no separate index to maintain — see middleware.py, which is the
+# only writer, and routers/admin.py, which reads it back for the admin
+# dashboard's request-count stats).
+request_stats_collection = db["request_stats"]
 
 
 async def ensure_indexes():

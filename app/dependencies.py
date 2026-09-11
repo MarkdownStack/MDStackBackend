@@ -1,3 +1,5 @@
+import os
+
 import jwt
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -5,6 +7,20 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 from .auth import decode_access_token
+from .database import users_collection
+
+# Comma-separated list of admin emails, e.g. "you@example.com,other@x.com" —
+# same env-var-driven config pattern as MAILGUN_* in email.py. Kept as a
+# plain env var rather than an `is_admin` field on the user document so
+# granting/revoking admin access is a config change, not a database write.
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+def is_admin_email(email: str | None) -> bool:
+    """Shared by get_current_admin below and routers/auth.py's _user_out
+    (which surfaces this as UserOut.is_admin so the frontend can show/hide
+    admin-only UI without guessing)."""
+    return bool(email) and email.strip().lower() in ADMIN_EMAILS
 
 # tokenUrl points the interactive docs (/docs) at the login endpoint
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -66,3 +82,14 @@ async def get_current_user_optional(token: str | None = Depends(optional_oauth2_
         return {"_id": ObjectId(user_id)}
     except (jwt.PyJWTError, InvalidId):
         return None
+
+
+async def get_current_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Same identity as get_current_user, but 403s unless that user's email
+    is in ADMIN_EMAILS. Does the one extra DB round trip get_current_user's
+    own docstring explains it normally avoids — acceptable here since
+    admin-only endpoints are low-traffic by nature."""
+    user = await users_collection.find_one({"_id": current_user["_id"]}, {"email": 1})
+    if not user or not is_admin_email(user.get("email")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return current_user

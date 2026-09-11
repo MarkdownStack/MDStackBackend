@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from ..auth import create_access_token, hash_password, verify_password
 from ..database import users_collection
-from ..dependencies import get_current_user
+from ..dependencies import get_current_user, is_admin_email
 from ..email import send_password_reset_email, send_verification_email
 from ..models import (
     ForgotPasswordRequest,
@@ -48,6 +48,7 @@ def _user_out(user: dict) -> UserOut:
         username=user.get("username", ""),
         email=user["email"],
         is_verified=user.get("is_verified", False),
+        is_admin=is_admin_email(user.get("email")),
         created_at=user.get("created_at", ""),
         updated_at=user.get("updated_at", user.get("created_at", "")),
     )

@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from .database import ensure_indexes
-from .routers import auth, notes, folders, search, tags, upload, public, export
+from .middleware import RequestCounterMiddleware
+from .routers import admin, auth, notes, folders, search, tags, upload, public, export
 
 load_dotenv()
 
@@ -24,6 +25,10 @@ app.add_middleware(
     # frontend) would silently fall back to a generic name every time.
     expose_headers=["Content-Disposition"],
 )
+# Runs after CORSMiddleware (Starlette applies middleware outside-in in the
+# order added, so this sits inside it) and records every real request for
+# the admin dashboard's request-count stats — see middleware.py.
+app.add_middleware(RequestCounterMiddleware)
 
 app.include_router(auth.router)
 app.include_router(notes.router)
@@ -33,6 +38,7 @@ app.include_router(tags.router)
 app.include_router(upload.router)
 app.include_router(public.router)
 app.include_router(export.router)
+app.include_router(admin.router)
 
 
 @app.on_event("startup")

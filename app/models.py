@@ -31,6 +31,11 @@ class UserOut(BaseModel):
     username: str = ""
     email: str
     is_verified: bool = False
+    # Computed from ADMIN_EMAILS (see dependencies.py), not stored — lets
+    # the frontend show/hide admin-only UI (the admin dashboard entry in
+    # SettingsMenu) without guessing, while the actual gate on every
+    # admin endpoint still re-checks server-side via get_current_admin.
+    is_admin: bool = False
     created_at: str
     updated_at: str
 
@@ -276,3 +281,19 @@ class GraphEdge(BaseModel):
 class GraphOut(BaseModel):
     nodes: List[GraphNode]
     edges: List[GraphEdge]
+
+
+# ---- Admin -------------------------------------------------------------
+
+class DailyRequestCount(BaseModel):
+    date: str
+    count: int
+
+
+class AdminStatsOut(BaseModel):
+    total_requests: int
+    requests_today: int
+    requests_last_7_days: List[DailyRequestCount]
+    total_users: int
+    total_notes: int
+    total_published_notes: int
