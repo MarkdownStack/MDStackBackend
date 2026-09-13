@@ -67,8 +67,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - "/etc/ssl/certs/tm_keys:/etc/ssl/certs/tm_keys"
-      - "/etc/ssl/certs/rm_keys:/etc/ssl/certs/rm_keys"
+      - "/etc/letsencrypt:/etc/letsencrypt:ro"
     depends_on:
       - backend
       - mcp

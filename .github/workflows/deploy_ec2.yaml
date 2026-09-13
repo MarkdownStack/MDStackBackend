@@ -89,7 +89,7 @@ jobs:
           # Path to the git clone of THIS repo on the EC2 box — the one
           # containing docker-compose.yml and nginx/. Adjust if yours lives
           # somewhere else.
-          DEPLOY_DIR="~/MDStackBackend"
+          DEPLOY_DIR="/home/ubuntu/MDStackBackend"
 
           # -v added temporarily for auth debugging — shows exactly which
           # key(s) were offered and why the server accepted/rejected each
