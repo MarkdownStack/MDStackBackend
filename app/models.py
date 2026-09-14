@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from pydantic import BaseModel, Field
 
@@ -23,45 +23,10 @@ from .modules.users.schemas import (  # noqa: F401
 # `from ..models import ... now_iso` keeps working unchanged.
 from .shared.datetime import now_iso  # noqa: F401
 
-
-class NoteCreate(BaseModel):
-    title: str
-    content: str = ""
-    folder_path: str = ""  # "" = root, otherwise e.g. "projects/alpha"
-
-
-class NoteUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    folder_path: Optional[str] = None
-    is_public: Optional[bool] = None
-
-
-class NoteOut(BaseModel):
-    id: str
-    title: str
-    content: str
-    folder_path: str
-    tags: List[str] = []
-    links: List[str] = []          # titles this note links to
-    backlinks: List[dict] = []     # [{id, title}] notes that link to this one
-    is_public: bool = False
-    upvotes: int = 0
-    downvotes: int = 0
-    created_at: str
-    updated_at: str
-
-
-class NoteSummary(BaseModel):
-    id: str
-    title: str
-    folder_path: str
-    tags: List[str] = []
-    is_public: bool = False
-    upvotes: int = 0
-    downvotes: int = 0
-    created_at: str
-    updated_at: str
+# NoteCreate/NoteUpdate/NoteOut/NoteSummary moved to
+# app/modules/notes/schemas.py as part of the backend restructure (see
+# PLAN.md) — nothing outside modules/notes imported them directly, so no
+# re-export shim is needed here.
 
 
 class FolderCreate(BaseModel):
