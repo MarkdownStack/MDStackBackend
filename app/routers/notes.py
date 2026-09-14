@@ -1,21 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
-from bson.errors import InvalidId
 from typing import List
 
 from ..database import notes_collection
 from ..dependencies import get_current_user
 from ..models import NoteCreate, NoteUpdate, NoteOut, NoteSummary, PublicNoteSummary, now_iso
+from ..shared.objectid import parse_object_id
 from ..utils import extract_links, extract_tags, normalize_folder_path, excerpt, authors_by_owner_id, comment_counts
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
 
 
 def oid(id_str: str) -> ObjectId:
-    try:
-        return ObjectId(id_str)
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid note id")
+    return parse_object_id(id_str, HTTPException(status_code=400, detail="Invalid note id"))
 
 
 async def resolve_backlinks(owner_id: str, title: str, exclude_id: str | None = None) -> list[dict]:

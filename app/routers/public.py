@@ -1,8 +1,6 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from bson import ObjectId
-from bson.errors import InvalidId
 from pymongo import ReturnDocument
 from typing import List
 
@@ -20,6 +18,7 @@ from ..models import (
     VoteUpdate,
     now_iso,
 )
+from ..shared.objectid import parse_object_id
 from ..utils import excerpt, authors_by_owner_id, comment_counts, folder_scope_pattern
 
 # Reading is public everywhere in this file — no auth dependency on any GET,
@@ -35,10 +34,7 @@ async def get_public_note_doc(note_id: str) -> dict:
     doesn't exist at all, isn't published, or note_id isn't even a valid
     ObjectId — an unpublished note must look identical to a nonexistent one
     from the outside."""
-    try:
-        note_oid = ObjectId(note_id)
-    except InvalidId:
-        raise HTTPException(status_code=404, detail="Note not found")
+    note_oid = parse_object_id(note_id, HTTPException(status_code=404, detail="Note not found"))
     doc = await notes_collection.find_one({"_id": note_oid, "is_public": True})
     if not doc:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -191,10 +187,7 @@ async def create_comment(note_id: str, payload: CommentCreate, current_user: dic
 @router.post("/notes/{note_id}/comments/{comment_id}/upvote", response_model=CommentOut)
 async def upvote_comment(note_id: str, comment_id: str):
     await get_public_note_doc(note_id)  # 404s if not a published note
-    try:
-        comment_oid = ObjectId(comment_id)
-    except InvalidId:
-        raise HTTPException(status_code=404, detail="Comment not found")
+    comment_oid = parse_object_id(comment_id, HTTPException(status_code=404, detail="Comment not found"))
 
     updated = await comments_collection.find_one_and_update(
         {"_id": comment_oid, "note_id": note_id},
@@ -222,10 +215,7 @@ async def get_public_folder_doc(folder_id: str) -> dict:
     folder doesn't exist, isn't published, or folder_id isn't a valid
     ObjectId at all, so an unpublished folder looks identical to a
     nonexistent one from the outside."""
-    try:
-        folder_oid = ObjectId(folder_id)
-    except InvalidId:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    folder_oid = parse_object_id(folder_id, HTTPException(status_code=404, detail="Folder not found"))
     doc = await folders_collection.find_one({"_id": folder_oid, "is_public": True})
     if not doc:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -322,10 +312,7 @@ async def get_public_folder_note(folder_id: str, note_id: str):
     doc = await get_public_folder_doc(folder_id)
     owner_id = doc["owner_id"]
     path = doc["path"]
-    try:
-        note_oid = ObjectId(note_id)
-    except InvalidId:
-        raise HTTPException(status_code=404, detail="Note not found")
+    note_oid = parse_object_id(note_id, HTTPException(status_code=404, detail="Note not found"))
     note = await notes_collection.find_one({"_id": note_oid, "owner_id": owner_id})
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")

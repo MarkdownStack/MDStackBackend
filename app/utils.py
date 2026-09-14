@@ -1,69 +1,22 @@
-import re
+"""Deprecated import path for the pure helpers this module used to hold —
+extract_links/extract_tags/excerpt moved to app/shared/markdown.py,
+normalize_folder_path/folder_scope_pattern to app/shared/paths.py (see
+PLAN.md). Re-exported below so every not-yet-migrated router's
+`from ..utils import ...` keeps working unchanged.
+
+The DB-touching helpers below (derive_author_name, authors_by_owner_id,
+comment_counts) are deliberately NOT moved to shared/ — they belong to
+modules/users and modules/comments respectively, which don't exist until
+Phase 3 migrates those routers. They stay here, working exactly as before,
+until then.
+"""
 
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from .database import users_collection, comments_collection
-
-# [[Note Title]] or [[Note Title|Display Text]]
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]")
-
-# #tag  (letters, numbers, dashes, underscores, forward-slash for nested tags like #project/alpha)
-TAG_RE = re.compile(r"(?<!\w)#([a-zA-Z0-9_\-/]+)")
-
-
-def extract_links(content: str) -> list[str]:
-    """Return unique, order-preserving list of wikilink titles referenced in content."""
-    seen = []
-    for match in WIKILINK_RE.finditer(content):
-        title = match.group(1).strip()
-        if title and title not in seen:
-            seen.append(title)
-    return seen
-
-
-def extract_tags(content: str) -> list[str]:
-    """Return unique, order-preserving list of #tags referenced in content."""
-    seen = []
-    for match in TAG_RE.finditer(content):
-        tag = match.group(1).strip()
-        if tag and tag not in seen:
-            seen.append(tag)
-    return seen
-
-
-def normalize_folder_path(path: str) -> str:
-    path = (path or "").strip().strip("/")
-    # collapse duplicate slashes
-    parts = [p for p in path.split("/") if p]
-    return "/".join(parts)
-
-
-def folder_scope_pattern(path: str) -> str:
-    """Anchored + escaped 'this folder or anything nested under it' regex,
-    matching `path` itself and `path/...` but never an unrelated sibling
-    that merely starts with the same characters (e.g. "notes" must not also
-    match "notes-archive"). Shared by every place that needs to scope a
-    query to a folder's whole subtree: the recursive folder-delete and the
-    published-folder note-count/listing endpoints (routers/folders.py,
-    routers/public.py) all use this exact pattern, rather than each
-    reimplementing (and risking drifting from) their own version of it."""
-    return f"^{re.escape(path)}(/.*)?$"
-
-
-_MD_STRIP_RE = re.compile(r"[`*_#>\[\]()~-]")
-_WS_RE = re.compile(r"\s+")
-
-
-def excerpt(content: str, length: int = 200) -> str:
-    """Plain-text preview for a public note listing — strips the most common
-    markdown punctuation and collapses whitespace/newlines so a card preview
-    doesn't show raw '#', '*', or '[[' characters, then truncates."""
-    stripped = _WS_RE.sub(" ", _MD_STRIP_RE.sub(" ", content)).strip()
-    if len(stripped) <= length:
-        return stripped
-    return stripped[:length].rsplit(" ", 1)[0] + "…"
-
+from .db.collections import comments_collection, users_collection
+from .shared.markdown import excerpt, extract_links, extract_tags  # noqa: F401
+from .shared.paths import folder_scope_pattern, normalize_folder_path  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Shared by any route that renders a published-note listing — both the
@@ -72,6 +25,7 @@ def excerpt(content: str, length: int = 200) -> str:
 # author-name and comment-count resolution, so it lives here once rather
 # than being duplicated (and inevitably drifting) between the two routers.
 # ---------------------------------------------------------------------------
+
 
 def derive_author_name(email: str) -> str:
     """Fallback byline for accounts that predate the `username` field —

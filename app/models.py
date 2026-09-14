@@ -1,10 +1,11 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
-from datetime import datetime, timezone
 
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+# Moved to app/shared/datetime.py as part of the backend restructure (see
+# PLAN.md) — now_iso isn't a schema, so it doesn't belong in this file.
+# Re-exported here so every not-yet-migrated router's
+# `from ..models import ... now_iso` keeps working unchanged.
+from .shared.datetime import now_iso  # noqa: F401
 
 
 # ---- Auth / Users ----------------------------------------------------
