@@ -1,6 +1,6 @@
 from typing import List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # Moved to app/modules/users/schemas.py as part of the backend restructure
 # (see PLAN.md) — re-exported here so anything not yet repointed at the
@@ -34,6 +34,14 @@ from .shared.datetime import now_iso  # noqa: F401
 # PLAN.md) — nothing outside modules/folders imported them directly, so no
 # re-export shim is needed here.
 
+# PublicNoteSummary/PublicNoteOut/PublicFolderNoteSummary/PublicFolderOut/
+# PublicFolderSummary/PublicFolderNoteOut/VoteUpdate moved to
+# app/modules/public/schemas.py, and CommentCreate/CommentOut to
+# app/modules/comments/schemas.py, as part of the backend restructure (see
+# PLAN.md) — grep confirmed nothing outside modules/notes and
+# modules/folders (both already updated to import from the new locations)
+# imported these directly, so no re-export shim is needed here.
+
 
 # ---- Export (vault -> downloadable .zip) -------------------------------
 
@@ -46,118 +54,6 @@ class ExportRequest(BaseModel):
     # the whole vault, so a plain empty selection is treated as a mistake.
     folder_paths: List[str] = []
     all: bool = False
-
-
-# ---- Public (unauthenticated) note access -----------------------------
-# Deliberately separate from NoteOut/NoteSummary: these are served with no
-# auth check at all, so they must never carry folder_path, links, backlinks,
-# or owner_id — anything that describes the private vault's internal
-# structure rather than the published note itself.
-
-class PublicNoteSummary(BaseModel):
-    id: str
-    title: str
-    excerpt: str = ""
-    tags: List[str] = []
-    author: str = "Someone"
-    upvotes: int = 0
-    downvotes: int = 0
-    comment_count: int = 0
-    updated_at: str
-
-
-class PublicNoteOut(BaseModel):
-    id: str
-    title: str
-    content: str
-    tags: List[str] = []
-    author: str = "Someone"
-    upvotes: int = 0
-    downvotes: int = 0
-    comment_count: int = 0
-    updated_at: str
-
-
-# ---- Public (unauthenticated) folder access ----------------------------
-# The folder-level counterpart to PublicNoteSummary/PublicNoteOut above.
-# Reachable at /p/folder/:id with no login, same as a published note — see
-# routers/public.py's get_public_folder/get_public_folder_note. A note
-# showing up here depends only on living inside a published folder's
-# subtree, never on the note's own `is_public` flag, so these are kept
-# entirely separate from NoteSummary/NoteOut (no folder_path-outside-the-
-# published-subtree, owner_id, or other private-vault detail leaks through).
-
-class PublicFolderNoteSummary(BaseModel):
-    id: str
-    title: str
-    folder_path: str  # relative to nothing in particular — the note's full
-                       # folder_path, used client-side only to group notes
-                       # under their subfolder in the reader's sidebar
-    excerpt: str = ""
-    tags: List[str] = []
-    updated_at: str
-
-
-class PublicFolderOut(BaseModel):
-    id: str
-    name: str  # last path segment — e.g. "alpha" for a folder at "projects/alpha"
-    path: str
-    author: str = "Someone"
-    notes: List[PublicFolderNoteSummary] = []
-    updated_at: str
-
-
-# The card-grid counterpart to PublicFolderOut above — powers the Explore
-# feed and the logged-out front page's "published folders" listing, the
-# same relationship PublicNoteSummary has to PublicNoteOut. No note list
-# here (that's what clicking through to PublicFolderOut is for) — just
-# enough to render a card: how many notes it holds, who published it, and
-# when it last changed.
-class PublicFolderSummary(BaseModel):
-    id: str
-    name: str
-    path: str
-    author: str = "Someone"
-    note_count: int = 0
-    updated_at: str
-
-
-class PublicFolderNoteOut(BaseModel):
-    id: str
-    title: str
-    content: str
-    folder_path: str
-    tags: List[str] = []
-    updated_at: str
-
-
-# A reader's vote on a note is either up (1), down (-1), or retracted (0).
-# There's no account/IP tracking behind this (see routers/public.py), so the
-# client is trusted to report its own previous state honestly — the server
-# just applies the delta between `previous` and `next`, clamped at 0.
-class VoteUpdate(BaseModel):
-    previous: int = Field(default=0, ge=-1, le=1)
-    next: int = Field(default=0, ge=-1, le=1)
-
-
-# ---- Comments (feedback on a published note, from signed-in users only) --
-# Reading a published note (and its comments) needs no account. Posting a
-# comment does — see the auth dependency on create_comment in
-# routers/public.py — so `author` is always resolved from the commenter's
-# real account rather than a free-typed name.
-
-class CommentCreate(BaseModel):
-    content: str = Field(min_length=1, max_length=2000)
-
-
-class CommentOut(BaseModel):
-    id: str
-    note_id: str
-    author: str
-    upvotes: int = 0
-    content: str
-    created_at: str
-    updated_at: str
 
 
 class GraphNode(BaseModel):

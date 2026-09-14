@@ -10,10 +10,12 @@ Include order is preserved exactly from the original app/main.py: auth
 
 from fastapi import APIRouter
 
+from .modules.comments.router import router as comments_router
 from .modules.folders.router import router as folders_router
 from .modules.notes.router import router as notes_router
+from .modules.public.router import router as public_router
 from .modules.users.router import router as users_router
-from .routers import admin, export, public, search, tags, upload
+from .routers import admin, export, search, tags, upload
 
 api_router = APIRouter()
 
@@ -23,6 +25,7 @@ api_router.include_router(folders_router)
 api_router.include_router(search.router)
 api_router.include_router(tags.router)
 api_router.include_router(upload.router)
-api_router.include_router(public.router)
+api_router.include_router(public_router)
+api_router.include_router(comments_router)
 api_router.include_router(export.router)
 api_router.include_router(admin.router)

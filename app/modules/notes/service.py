@@ -6,13 +6,13 @@ core/exceptions.py (same status code, same detail text)."""
 from bson import ObjectId
 
 from ...core.exceptions import BadRequestError, ConflictError, NotFoundError
-from ...models import PublicNoteSummary
+from ...modules.comments.repository import counts_for_notes as comment_counts
+from ...modules.public.schemas import PublicNoteSummary
 from ...modules.users.repository import authors_by_owner_id
 from ...shared.datetime import now_iso
 from ...shared.markdown import excerpt, extract_links, extract_tags
 from ...shared.objectid import parse_object_id
 from ...shared.paths import normalize_folder_path
-from ...utils import comment_counts
 from . import repository
 from .models import to_note_out, to_note_summary
 from .schemas import NoteCreate, NoteOut, NoteSummary, NoteUpdate

@@ -7,7 +7,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends
 
-from ...models import PublicNoteSummary
+from ...modules.public.schemas import PublicNoteSummary
 from ...shared.dependencies import get_current_user
 from . import service
 from .schemas import NoteCreate, NoteOut, NoteSummary, NoteUpdate

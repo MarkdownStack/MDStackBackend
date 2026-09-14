@@ -7,7 +7,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends
 
-from ...models import PublicFolderSummary
+from ...modules.public.schemas import PublicFolderSummary
 from ...shared.dependencies import get_current_user
 from . import service
 from .schemas import FolderCreate, FolderOut, FolderPublishUpdate

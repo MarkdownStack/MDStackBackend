@@ -4,7 +4,7 @@ app/routers/folders.py. Behavior unchanged; HTTPException is replaced with
 the equivalent domain exception from core/exceptions.py."""
 
 from ...core.exceptions import BadRequestError, ConflictError, NotFoundError
-from ...models import PublicFolderSummary
+from ...modules.public.schemas import PublicFolderSummary
 from ...modules.users.repository import authors_by_owner_id
 from ...shared.datetime import now_iso
 from ...shared.paths import folder_scope_pattern, normalize_folder_path
