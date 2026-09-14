@@ -29,24 +29,10 @@ from .shared.datetime import now_iso  # noqa: F401
 # re-export shim is needed here.
 
 
-class FolderCreate(BaseModel):
-    path: str  # full path e.g. "projects/alpha"
-
-
-class FolderOut(BaseModel):
-    id: str | None = None
-    path: str
-    is_public: bool = False
-    created_at: str
-    updated_at: str
-
-
-# Folder-level publish: the same idea as a note's own `is_public` toggle,
-# one level up — makes an entire folder (and everything nested under it)
-# reachable at a no-login-required URL, independent of whether any note
-# inside it is individually published. See routers/folders.py.
-class FolderPublishUpdate(BaseModel):
-    is_public: bool
+# FolderCreate/FolderOut/FolderPublishUpdate moved to
+# app/modules/folders/schemas.py as part of the backend restructure (see
+# PLAN.md) — nothing outside modules/folders imported them directly, so no
+# re-export shim is needed here.
 
 
 # ---- Export (vault -> downloadable .zip) -------------------------------
