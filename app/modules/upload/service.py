@@ -1,13 +1,17 @@
+"""Business logic for /api/upload — moved from app/routers/upload.py.
+Reuses modules/notes and modules/folders repository functions rather than
+duplicating notes_collection/folders_collection access wherever an
+identical query already exists there."""
+
 import os
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from typing import List
 
-from ..database import notes_collection, folders_collection
-from ..dependencies import get_current_user
-from ..models import now_iso
-from ..utils import extract_links, extract_tags, normalize_folder_path
-
-router = APIRouter(prefix="/api/upload", tags=["upload"])
+from ...modules.folders.repository import find_by_path
+from ...modules.notes.repository import find_by_title
+from ...modules.notes.repository import insert as insert_note
+from ...shared.datetime import now_iso
+from ...shared.markdown import extract_links, extract_tags
+from ...shared.paths import normalize_folder_path
+from . import repository
 
 # Only these are treated as note content; anything else is skipped (this
 # vault only has a model for markdown-ish text notes, not binary
@@ -39,7 +43,7 @@ async def unique_title(owner_id: str, desired: str) -> str:
     failing the whole upload."""
     candidate = desired
     n = 1
-    while await notes_collection.find_one({"owner_id": owner_id, "title": candidate}):
+    while await find_by_title(owner_id, candidate):
         n += 1
         candidate = f"{desired} ({n})"
     return candidate
@@ -57,17 +61,12 @@ async def ensure_folder_chain(owner_id: str, path: str, seen: set[str]) -> None:
         if ancestor in seen:
             continue
         seen.add(ancestor)
-        existing = await folders_collection.find_one({"owner_id": owner_id, "path": ancestor})
+        existing = await find_by_path(owner_id, ancestor)
         if not existing:
-            await folders_collection.insert_one({"owner_id": owner_id, "path": ancestor})
+            await repository.insert_bare_folder(owner_id, ancestor)
 
 
-@router.post("", status_code=201)
-async def upload_files(
-    files: List[UploadFile] = File(...),
-    base_folder_path: str = Form(""),
-    current_user: dict = Depends(get_current_user),
-):
+async def upload_files(owner_id: str, files: list, base_folder_path: str) -> dict:
     """Batch-import one or more files as notes.
 
     Accepts both a handful of loose files and an entire uploaded directory
@@ -75,7 +74,6 @@ async def upload_files(
     relative to `base_folder_path` (which itself defaults to the vault
     root), so nested folders are recreated automatically.
     """
-    owner_id = str(current_user["_id"])
     base_folder_path = normalize_folder_path(base_folder_path)
 
     created = []
@@ -120,10 +118,10 @@ async def upload_files(
             "created_at": ts,
             "updated_at": ts,
         }
-        result = await notes_collection.insert_one(doc)
+        note_id = await insert_note(doc)
         created.append(
             {
-                "id": str(result.inserted_id),
+                "id": str(note_id),
                 "path": relative_path,
                 "title": final_title,
                 "folder_path": folder_path,

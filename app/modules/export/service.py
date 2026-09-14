@@ -1,21 +1,25 @@
+"""Business logic for /api/export — moved from app/routers/export.py.
+Behavior unchanged; HTTPException replaced with the equivalent domain
+exception.
+
+One real fix folded into this migration (flagged in PLAN.md as a known
+duplication, deliberately left alone until this exact module existed):
+the folder-scope regex below now calls shared/paths.py's
+folder_scope_pattern() instead of rebuilding the identical
+`f"^{re.escape(p)}(/.*)?$"` pattern inline a second time."""
+
 import io
 import re
 import zipfile
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from ...core.exceptions import BadRequestError, NotFoundError
+from ...shared.paths import folder_scope_pattern, normalize_folder_path
+from . import repository
 
-from ..database import notes_collection, folders_collection
-from ..dependencies import get_current_user
-from ..models import ExportRequest
-from ..utils import normalize_folder_path
-
-router = APIRouter(prefix="/api/export", tags=["export"])
-
-# Same "only these are real note content" list upload.py uses — kept in
-# sync manually since a note's title has no stored extension of its own;
-# .md is what round-trips cleanly back through the upload importer.
+# Same "only these are real note content" list modules/upload uses — kept
+# in sync manually since a note's title has no stored extension of its
+# own; .md is what round-trips cleanly back through the upload importer.
 NOTE_EXTENSION = ".md"
 
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
@@ -31,9 +35,9 @@ def sanitize_filename(name: str) -> str:
 
 
 def unique_filename(used: set, base: str, ext: str) -> str:
-    """Same collision handling as upload.py's unique_title, mirrored here in
-    the other direction: two live notes can share a title if they live in
-    different folders, but only one of them lands in any given zip
+    """Same collision handling as modules/upload's unique_title, mirrored
+    here in the other direction: two live notes can share a title if they
+    live in different folders, but only one of them lands in any given zip
     directory, so a same-named sibling needs a ' (n)' suffix instead of
     silently overwriting the first file written."""
     candidate = f"{base}{ext}"
@@ -45,36 +49,35 @@ def unique_filename(used: set, base: str, ext: str) -> str:
     return candidate
 
 
-@router.post("")
-async def export_notes(payload: ExportRequest, current_user: dict = Depends(get_current_user)):
-    """Bundle the vault (or a chosen subset of its folders) into a .zip and
-    stream it back for download. Folder structure is recreated exactly,
-    including folders that have no notes of their own directly inside them
-    (only subfolders), so importing the zip back in via /api/upload
-    reconstructs the same tree.
-    """
-    owner_id = str(current_user["_id"])
+async def export_notes(owner_id: str, folder_paths: list[str], export_all: bool) -> tuple[io.BytesIO, str]:
+    """Bundle the vault (or a chosen subset of its folders) into a .zip.
+    Folder structure is recreated exactly, including folders that have no
+    notes of their own directly inside them (only subfolders), so
+    importing the zip back in via /api/upload reconstructs the same tree.
 
-    if payload.all:
+    Returns (zip_buffer, filename) — the buffer is seek(0)'d and ready to
+    stream.
+    """
+    if export_all:
         note_query: dict = {"owner_id": owner_id}
         folder_query: dict = {"owner_id": owner_id}
     else:
-        selected = sorted({normalize_folder_path(p) for p in payload.folder_paths if normalize_folder_path(p)})
+        selected = sorted({normalize_folder_path(p) for p in folder_paths if normalize_folder_path(p)})
         if not selected:
-            raise HTTPException(status_code=400, detail="Select at least one folder, or choose \"All\"")
+            raise BadRequestError('Select at least one folder, or choose "All"')
         # Anchored + escaped, same scoping the recursive folder-delete uses:
         # each selected path pulls in itself, its notes, and everything
         # nested under it — never an unrelated sibling that happens to share
         # a prefix (selecting "notes" must not also grab "notes-archive").
-        or_clauses = [{"$regex": f"^{re.escape(p)}(/.*)?$"} for p in selected]
+        or_clauses = [{"$regex": folder_scope_pattern(p)} for p in selected]
         note_query = {"owner_id": owner_id, "$or": [{"folder_path": c} for c in or_clauses]}
         folder_query = {"owner_id": owner_id, "$or": [{"path": c} for c in or_clauses]}
 
-    notes = [doc async for doc in notes_collection.find(note_query)]
-    folders = [doc async for doc in folders_collection.find(folder_query)]
+    notes = await repository.find_notes(note_query)
+    folders = await repository.find_folders(folder_query)
 
     if not notes and not folders:
-        raise HTTPException(status_code=404, detail="Nothing to export in the selected folder(s)")
+        raise NotFoundError("Nothing to export in the selected folder(s)")
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -107,8 +110,4 @@ async def export_notes(payload: ExportRequest, current_user: dict = Depends(get_
     buffer.seek(0)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"markdownstack-export-{stamp}.zip"
-    return StreamingResponse(
-        buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return buffer, filename
