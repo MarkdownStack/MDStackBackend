@@ -31,6 +31,10 @@ dependencies = [
     # (app/email.py) — already an mcp-extra dep below for mcp_server's own
     # REST client, promoted to a base dep now that the core app needs it too.
     "httpx>=0.27.0,<1.0",
+    # Already resolved transitively via fastmcp/mcp (see uv.lock) at 2.15.0 —
+    # promoted to a direct core dep now that app/core/config.py imports it
+    # itself, same reasoning as httpx above.
+    "pydantic-settings>=2.10,<3.0",
 ]
 
 # Kept separate from the core app deps above: the MCP server (mcp_server/)
@@ -80,7 +84,27 @@ mcp = [
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# One event loop for the whole test session (default is function-scoped),
+# so the Motor client — a module-level global created once at import — is
+# never handed to a second event loop mid-session, which raises
+# "Future/Task attached to a different loop".
+asyncio_default_fixture_loop_scope = "session"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = ["_removed"]
+
+[tool.ruff.lint]
+# Conservative default set — this is a restructuring pass, not a style
+# rewrite. Widen later, deliberately, once the new layout has settled.
+select = ["E", "F", "I"]
 
 [build-system]
 requires = ["hatchling"]

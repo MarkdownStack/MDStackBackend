@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends
 
 from ..database import notes_collection
 from ..dependencies import get_current_user
-from ..utils import normalize_folder_path  # noqa: F401 (kept for symmetry/future use)
 
 router = APIRouter(prefix="/api/tags", tags=["tags"])
 
