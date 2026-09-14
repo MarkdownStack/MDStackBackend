@@ -94,3 +94,39 @@ async def update(owner_id: str, note_oid: ObjectId, update_fields: dict) -> None
 async def delete(owner_id: str, note_oid: ObjectId) -> int:
     result = await notes_collection.delete_one({"_id": note_oid, "owner_id": owner_id})
     return result.deleted_count
+
+
+# ---------------------------------------------------------------------------
+# Queries for modules/search and modules/tags — both are thin modules with
+# no collection of their own (see PLAN.md), so they call straight into this
+# repository rather than duplicating notes_collection access.
+# ---------------------------------------------------------------------------
+
+
+async def text_search(owner_id: str, q: str, limit: int = 30) -> list[dict]:
+    cursor = (
+        notes_collection.find(
+            {"$text": {"$search": q}, "owner_id": owner_id},
+            {"score": {"$meta": "textScore"}, "title": 1, "folder_path": 1, "tags": 1, "content": 1},
+        )
+        .sort([("score", {"$meta": "textScore"})])
+        .limit(limit)
+    )
+    return [doc async for doc in cursor]
+
+
+async def tag_counts(owner_id: str) -> list[dict]:
+    pipeline = [
+        {"$match": {"owner_id": owner_id}},
+        {"$unwind": "$tags"},
+        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1, "_id": 1}},
+    ]
+    return [doc async for doc in notes_collection.aggregate(pipeline)]
+
+
+async def list_by_tag(owner_id: str, tag: str) -> list[dict]:
+    cursor = notes_collection.find(
+        {"tags": tag, "owner_id": owner_id}, {"title": 1, "folder_path": 1, "tags": 1, "updated_at": 1}
+    )
+    return [doc async for doc in cursor]

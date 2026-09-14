@@ -14,16 +14,18 @@ from .modules.comments.router import router as comments_router
 from .modules.folders.router import router as folders_router
 from .modules.notes.router import router as notes_router
 from .modules.public.router import router as public_router
+from .modules.search.router import router as search_router
+from .modules.tags.router import router as tags_router
 from .modules.users.router import router as users_router
-from .routers import admin, export, search, tags, upload
+from .routers import admin, export, upload
 
 api_router = APIRouter()
 
 api_router.include_router(users_router)
 api_router.include_router(notes_router)
 api_router.include_router(folders_router)
-api_router.include_router(search.router)
-api_router.include_router(tags.router)
+api_router.include_router(search_router)
+api_router.include_router(tags_router)
 api_router.include_router(upload.router)
 api_router.include_router(public_router)
 api_router.include_router(comments_router)
