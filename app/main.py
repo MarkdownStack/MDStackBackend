@@ -3,13 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api import api_router
 from .core.config import get_settings
 from .core.exceptions import register_exception_handlers
 from .core.logging import configure_logging
 from .core.middleware import RequestCounterMiddleware, RequestIdMiddleware
 from .db.indexes import ensure_indexes
 from .db.mongo import close as close_mongo
-from .routers import admin, auth, export, folders, notes, public, search, tags, upload
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -58,15 +58,7 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
 
-    app.include_router(auth.router)
-    app.include_router(notes.router)
-    app.include_router(folders.router)
-    app.include_router(search.router)
-    app.include_router(tags.router)
-    app.include_router(upload.router)
-    app.include_router(public.router)
-    app.include_router(export.router)
-    app.include_router(admin.router)
+    app.include_router(api_router)
 
     @app.get("/api/health")
     async def health():
