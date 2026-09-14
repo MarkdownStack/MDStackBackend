@@ -2,6 +2,16 @@
 
 > On approval this document gets written to `backend/PLAN.md` as the working checklist.
 
+## Status: complete (2026-09-14)
+
+Every phase below landed, each as its own commit on a stacked branch chain (`restructure/phase-1-core-db` → `phase-2-shared` → `phase-3-users` → `phase-3-notes` → `phase-3-folders` → `phase-3-public-comments` → `phase-3-search-tags` → `phase-3-upload-export` → `phase-3-admin`, then Phase 4's teardown on top). No route, status code, response body, or header changed — every phase was verified against a throwaway local MongoDB (never the real `.env`'s Atlas cluster) via full manual smoke passes, and the final state was verified with a real `docker build` + container run.
+
+**Deliberate deviations from the plan below, both explained in their commit messages:**
+- Phase 3's module order actually used was users → notes → folders → **public+comments together** → search+tags → upload+export → admin, not the plan's originally listed "users, comments, notes, folders, public, ...". Comments and public were combined into one migration step because today's code has every comment route living inside `public.py`, sharing its "is this note published" gate — splitting them into two sequential steps would have meant one briefly depending on a router file mid-deletion in the other.
+- Automated test-writing (this plan's Phase 0) was explicitly deferred at the user's request ("don't write the tests right now") — every phase was still verified, just manually rather than via a committed pytest suite. `backend/SKILL.md`'s "Known open issues" tracks this as still open.
+
+See `backend/SKILL.md` for the resulting architecture, kept up to date as the "read this first" doc — this file stays as the historical record of the restructure itself.
+
 ## Context
 
 `backend/` is a live FastAPI + MongoDB service (`api.stalk-my-money.in`, deployed from `master` via `.github/workflows/deploy_ec2.yaml`). It is ~1,800 LOC organized **purely by technical layer**: one flat `app/routers/` package, one 299-line `app/models.py` holding every Pydantic schema in the product, and one `app/utils.py` mixing pure text helpers with Mongo-touching helpers.
