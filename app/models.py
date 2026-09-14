@@ -64,17 +64,12 @@ class GraphOut(BaseModel):
     edges: List[GraphEdge]
 
 
-# ---- Admin -------------------------------------------------------------
+# GraphNode/GraphEdge/GraphOut above are dead code (the old graph-view
+# backend endpoint, disconnected — see backend/SKILL.md's "Known open
+# issues" and _removed/graph.py). Left alone here; deleting them is
+# Phase 4 teardown, not part of this module's migration.
 
-class DailyRequestCount(BaseModel):
-    date: str
-    count: int
-
-
-class AdminStatsOut(BaseModel):
-    total_requests: int
-    requests_today: int
-    requests_last_7_days: List[DailyRequestCount]
-    total_users: int
-    total_notes: int
-    total_published_notes: int
+# DailyRequestCount/AdminStatsOut moved to app/modules/admin/schemas.py as
+# part of the backend restructure (see PLAN.md) — nothing outside
+# modules/admin imported them directly, so no re-export shim is needed
+# here.
