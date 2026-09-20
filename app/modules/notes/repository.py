@@ -1,132 +1,149 @@
-"""All Motor calls for the notes collection — moved from
-app/routers/notes.py (queries) and app/database.py (collection handle)."""
+"""All SQLAlchemy queries for the notes table (and its many-to-many with
+tags) — replaces the Motor calls that used to live here."""
 
-from bson import ObjectId
+import uuid
 
-from ...db.collections import notes_collection
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-
-async def find_by_title(owner_id: str, title: str) -> dict | None:
-    return await notes_collection.find_one({"title": title, "owner_id": owner_id})
-
-
-async def find_by_title_excluding(owner_id: str, title: str, exclude_oid: ObjectId) -> dict | None:
-    return await notes_collection.find_one({"title": title, "owner_id": owner_id, "_id": {"$ne": exclude_oid}})
+from ...db.models import Note, Tag, note_tags
 
 
-async def find_by_id(owner_id: str, note_oid: ObjectId) -> dict | None:
-    return await notes_collection.find_one({"_id": note_oid, "owner_id": owner_id})
+async def find_by_title(session: AsyncSession, owner_id: uuid.UUID, title: str) -> Note | None:
+    result = await session.execute(select(Note).where(Note.owner_id == owner_id, Note.title == title))
+    return result.scalar_one_or_none()
 
 
-async def find_by_id_with_backlinks(owner_id: str, note_oid: ObjectId) -> dict | None:
-    """Fetching the note and then resolving its backlinks used to be two
-    *sequential* round trips to MongoDB — the second couldn't even start
-    until the first returned the title. Against a remote/cloud cluster
-    (see MONGO_URL in core/config.py), each round trip's network latency
-    stacks on top of the other, and this was the main source of the extra
-    delay noticed when switching between notes. Folding both into one
-    $lookup aggregation resolves the note and its backlinks server-side in
-    a single request instead. Returns the note doc with an extra
-    "_backlink_docs" key, or None if not found."""
-    pipeline = [
-        {"$match": {"_id": note_oid, "owner_id": owner_id}},
-        {
-            "$lookup": {
-                "from": "notes",
-                "let": {"myTitle": "$title", "myId": "$_id"},
-                "pipeline": [
-                    {
-                        "$match": {
-                            "$expr": {
-                                "$and": [
-                                    {"$eq": ["$owner_id", owner_id]},
-                                    {"$ne": ["$_id", "$$myId"]},
-                                    {"$in": ["$$myTitle", {"$ifNull": ["$links", []]}]},
-                                ]
-                            }
-                        }
-                    },
-                    {"$project": {"title": 1}},
-                ],
-                "as": "_backlink_docs",
-            }
-        },
-    ]
-    results = await notes_collection.aggregate(pipeline).to_list(length=1)
-    return results[0] if results else None
-
-
-async def find_titles_linking_to(owner_id: str, title: str, exclude_id: str | None = None) -> list[dict]:
-    """Find all of this user's notes whose `links` array contains this note's title."""
-    query = {"owner_id": owner_id, "links": title}
-    if exclude_id:
-        query["_id"] = {"$ne": ObjectId(exclude_id)}
-    cursor = notes_collection.find(query, {"title": 1})
-    return [{"id": str(doc["_id"]), "title": doc["title"]} async for doc in cursor]
-
-
-async def list_by_owner(owner_id: str, folder_path: str | None) -> list[dict]:
-    query = {"owner_id": owner_id}
-    if folder_path is not None:
-        query["folder_path"] = folder_path
-    cursor = notes_collection.find(query).sort("updated_at", -1)
-    return [doc async for doc in cursor]
-
-
-async def list_published_by_owner(owner_id: str) -> list[dict]:
-    # Same card shape/sort as the anonymous Explore feed in modules/public —
-    # see service.py's list_my_published_notes for why.
-    cursor = notes_collection.find({"owner_id": owner_id, "is_public": True}).sort(
-        [("upvotes", -1), ("updated_at", -1)]
+async def find_by_title_excluding(
+    session: AsyncSession, owner_id: uuid.UUID, title: str, exclude_id: uuid.UUID
+) -> Note | None:
+    result = await session.execute(
+        select(Note).where(Note.owner_id == owner_id, Note.title == title, Note.id != exclude_id)
     )
-    return [doc async for doc in cursor]
+    return result.scalar_one_or_none()
 
 
-async def insert(doc: dict) -> ObjectId:
-    result = await notes_collection.insert_one(doc)
-    return result.inserted_id
+async def find_by_id(session: AsyncSession, owner_id: uuid.UUID, note_id: uuid.UUID) -> Note | None:
+    result = await session.execute(
+        select(Note).options(selectinload(Note.tags)).where(Note.id == note_id, Note.owner_id == owner_id)
+    )
+    return result.scalar_one_or_none()
 
 
-async def update(owner_id: str, note_oid: ObjectId, update_fields: dict) -> None:
-    await notes_collection.update_one({"_id": note_oid, "owner_id": owner_id}, {"$set": update_fields})
+async def find_titles_linking_to(
+    session: AsyncSession, owner_id: uuid.UUID, title: str, exclude_id: uuid.UUID | None = None
+) -> list[dict]:
+    """Find all of this user's notes whose `links` array contains this
+    note's title — array containment (`title = ANY(notes.links)`), not a
+    regex or substring match."""
+    query = select(Note.id, Note.title).where(Note.owner_id == owner_id, Note.links.any(title))
+    if exclude_id is not None:
+        query = query.where(Note.id != exclude_id)
+    result = await session.execute(query)
+    return [{"id": str(row.id), "title": row.title} for row in result.all()]
 
 
-async def delete(owner_id: str, note_oid: ObjectId) -> int:
-    result = await notes_collection.delete_one({"_id": note_oid, "owner_id": owner_id})
-    return result.deleted_count
+async def list_by_owner(session: AsyncSession, owner_id: uuid.UUID, folder_path: str | None) -> list[Note]:
+    query = select(Note).options(selectinload(Note.tags)).where(Note.owner_id == owner_id)
+    if folder_path is not None:
+        query = query.where(Note.folder_path == folder_path)
+    query = query.order_by(Note.updated_at.desc())
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def list_published_by_owner(session: AsyncSession, owner_id: uuid.UUID) -> list[Note]:
+    # Same card shape/sort as the anonymous Explore feed in modules/public.
+    query = (
+        select(Note)
+        .options(selectinload(Note.tags))
+        .where(Note.owner_id == owner_id, Note.is_public.is_(True))
+        .order_by(Note.upvotes.desc(), Note.updated_at.desc())
+    )
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def insert(session: AsyncSession, note: Note) -> Note:
+    session.add(note)
+    await session.flush()  # populates note.id/created_at/updated_at before commit
+    return note
+
+
+async def delete(session: AsyncSession, owner_id: uuid.UUID, note_id: uuid.UUID) -> int:
+    note = await find_by_id(session, owner_id, note_id)
+    if note is None:
+        return 0
+    await session.delete(note)
+    await session.flush()
+    return 1
+
+
+async def get_or_create_tags(session: AsyncSession, owner_id: uuid.UUID, names: list[str]) -> list[Tag]:
+    """Get-or-create Tag rows for `names` (case-sensitive, exactly as
+    extract_tags produced them), scoped to this owner. Used to populate
+    Note.tags on create/update — see modules/notes/service.py."""
+    if not names:
+        return []
+    result = await session.execute(select(Tag).where(Tag.owner_id == owner_id, Tag.name.in_(names)))
+    existing = {tag.name: tag for tag in result.scalars().all()}
+    tags: list[Tag] = []
+    for name in names:
+        tag = existing.get(name)
+        if tag is None:
+            tag = Tag(owner_id=owner_id, name=name)
+            session.add(tag)
+            existing[name] = tag
+        tags.append(tag)
+    return tags
 
 
 # ---------------------------------------------------------------------------
 # Queries for modules/search and modules/tags — both are thin modules with
-# no collection of their own (see PLAN.md), so they call straight into this
-# repository rather than duplicating notes_collection access.
+# no table of their own, so they call straight into this repository rather
+# than duplicating notes/tags access.
 # ---------------------------------------------------------------------------
 
 
-async def text_search(owner_id: str, q: str, limit: int = 30) -> list[dict]:
-    cursor = (
-        notes_collection.find(
-            {"$text": {"$search": q}, "owner_id": owner_id},
-            {"score": {"$meta": "textScore"}, "title": 1, "folder_path": 1, "tags": 1, "content": 1},
-        )
-        .sort([("score", {"$meta": "textScore"})])
+async def text_search(session: AsyncSession, owner_id: uuid.UUID, q: str, limit: int = 30) -> list[Note]:
+    """Full-text search across title + content, using the stored
+    `search_vector` generated column (see db/models.py) — the direct
+    Postgres equivalent of the old Mongo `$text` index.
+    `plainto_tsquery` is Postgres's own text-search query parser, not a
+    regular expression."""
+    ts_query = func.plainto_tsquery("english", q)
+    rank = func.ts_rank(Note.search_vector, ts_query).label("rank")
+    query = (
+        select(Note)
+        .options(selectinload(Note.tags))
+        .where(Note.owner_id == owner_id, Note.search_vector.op("@@")(ts_query))
+        .order_by(rank.desc())
         .limit(limit)
     )
-    return [doc async for doc in cursor]
+    result = await session.execute(query)
+    return list(result.scalars().all())
 
 
-async def tag_counts(owner_id: str) -> list[dict]:
-    pipeline = [
-        {"$match": {"owner_id": owner_id}},
-        {"$unwind": "$tags"},
-        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1, "_id": 1}},
-    ]
-    return [doc async for doc in notes_collection.aggregate(pipeline)]
-
-
-async def list_by_tag(owner_id: str, tag: str) -> list[dict]:
-    cursor = notes_collection.find(
-        {"tags": tag, "owner_id": owner_id}, {"title": 1, "folder_path": 1, "tags": 1, "updated_at": 1}
+async def tag_counts(session: AsyncSession, owner_id: uuid.UUID) -> list[dict]:
+    query = (
+        select(Tag.name, func.count(note_tags.c.note_id).label("count"))
+        .join(note_tags, note_tags.c.tag_id == Tag.id)
+        .where(Tag.owner_id == owner_id)
+        .group_by(Tag.name)
+        .order_by(text("count DESC"), Tag.name.asc())
     )
-    return [doc async for doc in cursor]
+    result = await session.execute(query)
+    return [{"tag": name, "count": count} for name, count in result.all()]
+
+
+async def list_by_tag(session: AsyncSession, owner_id: uuid.UUID, tag: str) -> list[Note]:
+    query = (
+        select(Note)
+        .options(selectinload(Note.tags))
+        .join(note_tags, note_tags.c.note_id == Note.id)
+        .join(Tag, Tag.id == note_tags.c.tag_id)
+        .where(Note.owner_id == owner_id, Tag.name == tag)
+    )
+    result = await session.execute(query)
+    return list(result.scalars().all())

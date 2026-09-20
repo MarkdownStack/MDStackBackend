@@ -1,93 +1,92 @@
-"""All Motor calls for the users collection — moved from
-app/routers/auth.py (queries) and app/database.py (collection handle)."""
+"""All SQLAlchemy queries for the users table — replaces the Motor calls
+that used to live here."""
 
-from bson import ObjectId
-from bson.errors import InvalidId
+import uuid
+from datetime import datetime, timezone
 
-from ...db.collections import users_collection
-from ...shared.datetime import now_iso
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ...db.models import User
 
 
-async def find_by_identifier(identifier: str) -> dict | None:
+async def find_by_identifier(session: AsyncSession, identifier: str) -> User | None:
     """Look a user up by email OR username — both are stored lowercased
     (see insert_user below), so lowercasing the incoming identifier once
-    here matches either field with a single query. Used by login and by
+    here matches either column with a single query. Used by login and by
     the resend-verification/forgot-password recovery flows, since someone
     who signed up with a username may not remember (or want to type) their
     email for those either."""
     identifier = identifier.strip().lower()
     if not identifier:
         return None
-    return await users_collection.find_one({"$or": [{"email": identifier}, {"username": identifier}]})
+    result = await session.execute(select(User).where(or_(User.email == identifier, User.username == identifier)))
+    return result.scalar_one_or_none()
 
 
-async def find_by_email(email: str) -> dict | None:
-    return await users_collection.find_one({"email": email})
+async def find_by_email(session: AsyncSession, email: str) -> User | None:
+    result = await session.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()
 
 
-async def find_by_username(username: str) -> dict | None:
-    return await users_collection.find_one({"username": username})
+async def find_by_username(session: AsyncSession, username: str) -> User | None:
+    result = await session.execute(select(User).where(User.username == username))
+    return result.scalar_one_or_none()
 
 
-async def find_by_id(user_id: ObjectId) -> dict | None:
-    return await users_collection.find_one({"_id": user_id})
+async def find_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+    return await session.get(User, user_id)
 
 
-async def find_by_verification_token(token: str) -> dict | None:
-    return await users_collection.find_one({"verification_token": token})
+async def find_by_verification_token(session: AsyncSession, token: str) -> User | None:
+    result = await session.execute(select(User).where(User.verification_token == token))
+    return result.scalar_one_or_none()
 
 
-async def find_by_reset_token(token: str) -> dict | None:
-    return await users_collection.find_one({"password_reset_token": token})
+async def find_by_reset_token(session: AsyncSession, token: str) -> User | None:
+    result = await session.execute(select(User).where(User.password_reset_token == token))
+    return result.scalar_one_or_none()
 
 
-async def insert_user(doc: dict) -> ObjectId:
-    result = await users_collection.insert_one(doc)
-    return result.inserted_id
+async def insert_user(session: AsyncSession, user: User) -> User:
+    session.add(user)
+    await session.flush()  # populates user.id/created_at/updated_at before commit
+    return user
 
 
-async def mark_verified(user_id: ObjectId) -> None:
-    await users_collection.update_one(
-        {"_id": user_id},
-        {
-            "$set": {"is_verified": True, "updated_at": now_iso()},
-            "$unset": {"verification_token": "", "verification_token_expires": ""},
-        },
-    )
+async def mark_verified(session: AsyncSession, user: User) -> None:
+    user.is_verified = True
+    user.verification_token = None
+    user.verification_token_expires = None
+    user.updated_at = datetime.now(timezone.utc)
 
 
-async def set_verification_token(user_id: ObjectId, token: str, expires_at: str) -> None:
-    await users_collection.update_one(
-        {"_id": user_id},
-        {"$set": {"verification_token": token, "verification_token_expires": expires_at, "updated_at": now_iso()}},
-    )
+async def set_verification_token(session: AsyncSession, user: User, token: str, expires_at) -> None:
+    user.verification_token = token
+    user.verification_token_expires = expires_at
+    user.updated_at = datetime.now(timezone.utc)
 
 
-async def set_password_reset_token(user_id: ObjectId, token: str, expires_at: str) -> None:
-    await users_collection.update_one(
-        {"_id": user_id},
-        {"$set": {"password_reset_token": token, "password_reset_token_expires": expires_at, "updated_at": now_iso()}},
-    )
+async def set_password_reset_token(session: AsyncSession, user: User, token: str, expires_at) -> None:
+    user.password_reset_token = token
+    user.password_reset_token_expires = expires_at
+    user.updated_at = datetime.now(timezone.utc)
 
 
-async def update_password(user_id: ObjectId, password_hash: str) -> None:
-    await users_collection.update_one(
-        {"_id": user_id},
-        {
-            "$set": {"password_hash": password_hash, "updated_at": now_iso()},
-            # Both single-use — a spent (or now-superseded) reset token
-            # must never work again, same as verification_token on success.
-            "$unset": {"password_reset_token": "", "password_reset_token_expires": ""},
-        },
-    )
+async def update_password(session: AsyncSession, user: User, password_hash: str) -> None:
+    user.password_hash = password_hash
+    # Both single-use — a spent (or now-superseded) reset token must never
+    # work again, same as verification_token on success.
+    user.password_reset_token = None
+    user.password_reset_token_expires = None
+    user.updated_at = datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
-# Author-name resolution — moved from app/utils.py now that this module
-# exists. Used by every route that renders a published-note listing (the
-# public/anonymous explore feed, "my published notes", published folders)
-# so they all resolve author names identically rather than each
-# reimplementing (and risking drifting from) their own version.
+# Author-name resolution — used by every route that renders a published-
+# note listing (the public/anonymous explore feed, "my published notes",
+# published folders) so they all resolve author names identically rather
+# than each reimplementing (and risking drifting from) their own version.
 # ---------------------------------------------------------------------------
 
 
@@ -101,26 +100,26 @@ def derive_author_name(email: str) -> str:
     return cleaned.title() if cleaned else "Someone"
 
 
-async def authors_by_owner_id(owner_ids) -> dict:
-    """Batch-resolve owner_id -> display author name in a single query,
-    instead of one users_collection round trip per note in a list. Prefers
-    the account's real username; falls back to derive_author_name for
+async def authors_by_owner_id(session: AsyncSession, owner_ids) -> dict[str, str]:
+    """Batch-resolve owner_id (str) -> display author name in a single
+    query, instead of one round trip per note in a list. Prefers the
+    account's real username; falls back to derive_author_name for
     accounts created before that field existed."""
-    oid_to_owner_id = {}
+    uuid_to_owner_id: dict[uuid.UUID, str] = {}
     for owner_id in owner_ids:
         try:
-            oid_to_owner_id[ObjectId(owner_id)] = owner_id
-        except InvalidId:
+            uuid_to_owner_id[uuid.UUID(owner_id)] = owner_id
+        except (ValueError, AttributeError, TypeError):
             continue
-    if not oid_to_owner_id:
+    if not uuid_to_owner_id:
         return {}
 
-    result = {}
-    cursor = users_collection.find(
-        {"_id": {"$in": list(oid_to_owner_id.keys())}}, {"email": 1, "username": 1}
+    result = await session.execute(
+        select(User.id, User.email, User.username).where(User.id.in_(uuid_to_owner_id.keys()))
     )
-    async for doc in cursor:
-        owner_id = oid_to_owner_id.get(doc["_id"])
+    output: dict[str, str] = {}
+    for user_id, email, username in result.all():
+        owner_id = uuid_to_owner_id.get(user_id)
         if owner_id:
-            result[owner_id] = doc.get("username") or derive_author_name(doc.get("email", ""))
-    return result
+            output[owner_id] = username or derive_author_name(email)
+    return output

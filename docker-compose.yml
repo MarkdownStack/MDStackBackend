@@ -1,4 +1,16 @@
 services:
+  # Postgres migration: MongoDB was a managed Atlas cluster (external —
+  # never a container in this compose file at all, see .env.example's
+  # commented-out connection string history). Postgres started out
+  # self-hosted here too, but production has since moved to a managed
+  # instance (AWS RDS) — there's no `postgres` service in this file anymore.
+  # backend's DATABASE_URL below comes straight from ./.env (see
+  # .env.example's "Production" section) rather than being overridden to
+  # point at a local container. Local dev still runs its own Postgres in
+  # Docker — see docker-compose.override.yml, which adds that service (and
+  # the matching DATABASE_URL/depends_on for `backend`) back in, and is
+  # never deployed here (.github/workflows/deploy_ec2.yaml only copies this
+  # file itself).
   backend:
     image: parimalmahindrakar/mdstack_backend:latest
     # Built and pushed by .github/workflows/deploy_ec2.yaml on every push to
@@ -17,7 +29,7 @@ services:
     # No host port published — nginx is the only public entrypoint.
     # Uncomment to hit the API directly (e.g. while debugging):
     # ports:
-    #   - "5000:5000"
+    #   - "8000:8000"
 
   mcp:
     # Built locally on this box (like nginx below), NOT pulled from Docker
@@ -35,7 +47,7 @@ services:
       # Talks to `backend` over this compose network's own DNS — not
       # localhost, which inside this container means itself, not the
       # backend container.
-      - MDSTACK_API_BASE_URL=http://backend:5000
+      - MDSTACK_API_BASE_URL=http://backend:8000
       - MDSTACK_MCP_TRANSPORT=http
       - MDSTACK_MCP_HOST=0.0.0.0
       - MDSTACK_MCP_PORT=8090

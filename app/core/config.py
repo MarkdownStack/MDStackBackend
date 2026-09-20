@@ -1,17 +1,18 @@
 """Centralized application settings.
 
-Every environment variable the app reads used to live as a scattered
-``os.getenv(...)`` call at *module import time* across app/auth.py,
-app/database.py, app/dependencies.py, and app/email.py — see backend/
-SKILL.md's documented gotcha ("editing .env while uvicorn is running does
-nothing until restart"). That gotcha is unchanged here (get_settings() is
-still cached and still only read once per process, same as before) — what
-moves is *where*: one place, so it's no longer a matter of import-order
-luck which module happens to trigger python-dotenv's load first.
+Every environment variable the app reads lives here, in one place — see
+backend/SKILL.md's documented gotcha, unchanged by this migration:
+Settings is read once per process (get_settings() is lru_cached), so
+editing .env while uvicorn is running does nothing until it's restarted.
 
-Every default below is copied **verbatim** from the module it replaces —
-including the malformed ``mongo_url`` default — so nothing about runtime
-behavior changes just from this file existing.
+Postgres migration note: `mongo_url`/`db_name` are gone — nothing in the
+app reads them anymore (see app/db/postgres.py/app/db/models.py). This is
+plain dead-code removal, not the security fix backend/SKILL.md and the
+repo root's SKILL.md describe as still open and owner-only to action: the
+real, live MongoDB Atlas password committed to `.env.example` lives in a
+separate, already-commented-out block there and is left completely
+untouched by this migration (see that file) — nothing here rotates or
+removes it.
 """
 
 from functools import lru_cache
@@ -20,19 +21,12 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Belt-and-suspenders alongside pydantic-settings' own env_file loading
-# below: a few not-yet-migrated modules (app/email.py, app/dependencies.py
-# — see PLAN.md's Phase 2/3) still read os.getenv(...) directly rather than
-# going through Settings, exactly like before this restructure. Those still
-# need .env's values sitting in the real process environment, which
-# pydantic-settings' env_file support does NOT do (it parses the file into
-# the Settings object only, it never touches os.environ). This is also the
-# first of this package's own modules imported by app/main.py, so calling
-# it here — rather than relying on some other module happening to import
-# python-dotenv first, which is exactly the fragile accident this
-# restructure is fixing — guarantees .env is loaded before anything else in
-# the app runs. load_dotenv()'s default `override=False` means it never
-# clobbers a real environment variable already set (e.g. Docker's
-# `env_file:` in docker-compose.yml), matching prior behavior exactly.
+# below: a few call sites (modules/users/email.py) still read from this
+# Settings object rather than os.getenv(...) directly, but load_dotenv()'s
+# default `override=False` means it never clobbers a real environment
+# variable already set (e.g. Docker's `env_file:` in docker-compose.yml) —
+# calling it here, the first of this package's own modules main.py
+# imports, guarantees .env is loaded before anything else in the app runs.
 load_dotenv()
 
 
@@ -47,21 +41,29 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ---- Database (was app/database.py) ---------------------------------
-    mongo_url: str = "http:localhost:27017/"
-    db_name: str = "test_db"
+    # ---- Database ----------------------------------------------------
+    # Full SQLAlchemy async URL, e.g.
+    # postgresql+asyncpg://user:password@host:5432/dbname — see
+    # .env.example. The default matches the local `postgres` service in
+    # docker-compose.yml, same "sane local default" spirit the old
+    # mongo_url fallback had.
+    #
+    # In production this points at a managed Postgres instance (e.g. AWS
+    # RDS) — a plain, direct connection, same shape as the local default
+    # above, just with a different host/user/password/database.
+    database_url: str = "postgresql+asyncpg://mdstack:mdstack@localhost:5432/mdstack"
 
-    # ---- Auth / JWT (was app/auth.py) ------------------------------------
+    # ---- Auth / JWT --------------------------------------------------
     jwt_secret_key: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 10080  # 7 days
 
-    # ---- Admin dashboard (was app/dependencies.py) -----------------------
+    # ---- Admin dashboard ----------------------------------------------
     # Comma-separated list of admin emails, e.g. "you@example.com,x@y.com" —
     # a config change, not a database write. See admin_email_set below.
     admin_emails: str = ""
 
-    # ---- Mailgun (was app/email.py) --------------------------------------
+    # ---- Mailgun (modules/users/email.py) ------------------------------
     mailgun_api_key: str = ""
     # The full "…/v3/<domain>/messages" endpoint, not just a bare domain —
     # this project's Mailgun setup hands out the whole URI directly.
@@ -72,13 +74,12 @@ class Settings(BaseSettings):
     # routes, not backend ones).
     frontend_base_url: str = "http://localhost:5173"
 
-    # ---- Logging (new — see core/logging.py) ------------------------------
+    # ---- Logging --------------------------------------------------------
     log_level: str = "INFO"
 
     @property
     def admin_email_set(self) -> set[str]:
-        """Same parsing app/dependencies.py did once at import time:
-        lowercased, stripped, comma-split, empty entries dropped."""
+        """Lowercased, stripped, comma-split, empty entries dropped."""
         return {e.strip().lower() for e in self.admin_emails.split(",") if e.strip()}
 
     @property

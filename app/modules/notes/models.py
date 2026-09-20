@@ -1,34 +1,43 @@
-"""Mongo document -> response schema mapping for notes."""
+"""ORM object -> response schema mapping for notes."""
 
+from ...db.models import Note
+from ...shared.datetime import iso
 from .schemas import NoteOut, NoteSummary
 
 
-def to_note_summary(doc: dict) -> NoteSummary:
+def _tag_names(note: Note) -> list[str]:
+    # Alphabetical, not insertion-order — see db/models.py's note_tags
+    # docstring for why that's an acceptable, deliberate difference from
+    # the old Mongo array's order.
+    return sorted(tag.name for tag in note.tags)
+
+
+def to_note_summary(note: Note) -> NoteSummary:
     return NoteSummary(
-        id=str(doc["_id"]),
-        title=doc["title"],
-        folder_path=doc.get("folder_path", ""),
-        tags=doc.get("tags", []),
-        is_public=doc.get("is_public", False),
-        upvotes=doc.get("upvotes", 0),
-        downvotes=doc.get("downvotes", 0),
-        created_at=doc.get("created_at", ""),
-        updated_at=doc.get("updated_at", ""),
+        id=str(note.id),
+        title=note.title,
+        folder_path=note.folder_path,
+        tags=_tag_names(note),
+        is_public=note.is_public,
+        upvotes=note.upvotes,
+        downvotes=note.downvotes,
+        created_at=iso(note.created_at),
+        updated_at=iso(note.updated_at),
     )
 
 
-def to_note_out(doc: dict, backlinks: list[dict]) -> NoteOut:
+def to_note_out(note: Note, backlinks: list[dict]) -> NoteOut:
     return NoteOut(
-        id=str(doc["_id"]),
-        title=doc["title"],
-        content=doc.get("content", ""),
-        folder_path=doc.get("folder_path", ""),
-        tags=doc.get("tags", []),
-        links=doc.get("links", []),
+        id=str(note.id),
+        title=note.title,
+        content=note.content,
+        folder_path=note.folder_path,
+        tags=_tag_names(note),
+        links=list(note.links or []),
         backlinks=backlinks,
-        is_public=doc.get("is_public", False),
-        upvotes=doc.get("upvotes", 0),
-        downvotes=doc.get("downvotes", 0),
-        created_at=doc.get("created_at", ""),
-        updated_at=doc.get("updated_at", ""),
+        is_public=note.is_public,
+        upvotes=note.upvotes,
+        downvotes=note.downvotes,
+        created_at=iso(note.created_at),
+        updated_at=iso(note.updated_at),
     )

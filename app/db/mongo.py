@@ -1,25 +1,17 @@
-"""Mongo client lifecycle — moved from the top half of app/database.py.
+"""Retired — the app now runs on Postgres.
 
-The client itself is still created eagerly at import (Motor's
-AsyncIOMotorClient doesn't open a real socket until first use, so this
-matches today's behavior exactly — no new connect-on-startup timing to
-worry about). The one real addition is close(), called from the app's
-lifespan on shutdown (see app/main.py) — today's client is never closed at
-all.
+This file is kept only as a marker (matching this codebase's own history
+of leaving a thin, deliberately-broken shim behind a migration — see
+backend/SKILL.md's account of app/database.py during the original Mongo
+restructure) so a stale `from ..db.mongo import ...` somewhere fails loudly
+at import time instead of silently reconnecting to a database nothing else
+uses anymore.
+
+See app/db/postgres.py for the engine/session lifecycle and
+app/db/models.py for the schema. Safe to delete outright once you've
+confirmed nothing still imports this module.
 """
 
-from motor.motor_asyncio import AsyncIOMotorClient
-
-from ..core.config import get_settings
-
-settings = get_settings()
-
-client: AsyncIOMotorClient = AsyncIOMotorClient(settings.mongo_url)
-db = client[settings.db_name]
-
-
-async def close() -> None:
-    # AsyncIOMotorClient.close() is a plain sync call (it just tears down
-    # the underlying connection pool) — this wrapper is async purely so the
-    # lifespan shutdown handler can await it like everything else there.
-    client.close()
+raise ImportError(
+    "app.db.mongo was retired by the Postgres migration — see app/db/postgres.py and app/db/models.py instead."
+)

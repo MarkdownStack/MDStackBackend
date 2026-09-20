@@ -1,35 +1,36 @@
-"""Motor calls for /api/admin/stats — moved from app/routers/admin.py
-(queries) and app/database.py (collection handles)."""
+"""Queries for /api/admin/stats."""
 
-from ...db.collections import notes_collection, request_stats_collection, users_collection
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-async def sum_all_request_counts() -> int:
-    total = 0
-    async for doc in request_stats_collection.find({}, {"count": 1}):
-        total += doc.get("count", 0)
-    return total
+from ...db.models import Note, RequestStat, User
 
 
-async def get_count_for_date(date: str) -> int:
-    doc = await request_stats_collection.find_one({"_id": date}, {"count": 1})
-    return doc.get("count", 0) if doc else 0
+async def sum_all_request_counts(session: AsyncSession) -> int:
+    result = await session.execute(select(func.coalesce(func.sum(RequestStat.count), 0)))
+    return result.scalar_one()
 
 
-async def get_counts_for_dates(dates: list[str]) -> dict[str, int]:
-    counts_by_date: dict[str, int] = {}
-    async for doc in request_stats_collection.find({"_id": {"$in": dates}}, {"count": 1}):
-        counts_by_date[doc["_id"]] = doc.get("count", 0)
-    return counts_by_date
+async def get_count_for_date(session: AsyncSession, date: str) -> int:
+    result = await session.execute(select(RequestStat.count).where(RequestStat.date == date))
+    return result.scalar_one_or_none() or 0
 
 
-async def count_users() -> int:
-    return await users_collection.count_documents({})
+async def get_counts_for_dates(session: AsyncSession, dates: list[str]) -> dict[str, int]:
+    result = await session.execute(select(RequestStat.date, RequestStat.count).where(RequestStat.date.in_(dates)))
+    return dict(result.all())
 
 
-async def count_notes() -> int:
-    return await notes_collection.count_documents({})
+async def count_users(session: AsyncSession) -> int:
+    result = await session.execute(select(func.count()).select_from(User))
+    return result.scalar_one()
 
 
-async def count_published_notes() -> int:
-    return await notes_collection.count_documents({"is_public": True})
+async def count_notes(session: AsyncSession) -> int:
+    result = await session.execute(select(func.count()).select_from(Note))
+    return result.scalar_one()
+
+
+async def count_published_notes(session: AsyncSession) -> int:
+    result = await session.execute(select(func.count()).select_from(Note).where(Note.is_public.is_(True)))
+    return result.scalar_one()

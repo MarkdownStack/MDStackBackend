@@ -100,7 +100,7 @@ authenticate for the write/private tools):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MDSTACK_API_BASE_URL` | `http://localhost:5000` | Base URL of the running backend |
+| `MDSTACK_API_BASE_URL` | `http://localhost:8000` | Base URL of the running backend |
 | `MDSTACK_ACCESS_TOKEN` | — | A pre-issued JWT bearer token — skips login entirely |
 | `MDSTACK_EMAIL` + `MDSTACK_PASSWORD` | — | Credentials to auto-login with on first auth-requiring call, if no token is set |
 | `MDSTACK_EXPORT_DIR` | current directory | Where `export_vault` writes the downloaded `.zip` |
@@ -152,7 +152,7 @@ alongside `preferences`, not nested inside it:
         "mcp_server.server"
       ],
       "env": {
-        "MDSTACK_API_BASE_URL": "http://localhost:5000",
+        "MDSTACK_API_BASE_URL": "http://localhost:8000",
         "MDSTACK_EMAIL": "you@example.com",
         "MDSTACK_PASSWORD": "your-password"
       }

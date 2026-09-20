@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-DEFAULT_BASE_URL = "http://localhost:5000"
+DEFAULT_BASE_URL = "http://localhost:8000"
 
 
 class MarkdownStackError(RuntimeError):

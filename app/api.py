@@ -1,9 +1,9 @@
-"""Aggregate router — includes every module's router. Every module has now
-migrated out of app/routers/ (see PLAN.md's Phase 3); main.py includes
-just this one router.
+"""Aggregate router — includes every module's router.
 
-Include order is preserved exactly from the original app/main.py: auth
-(now users), notes, folders, search, tags, upload, public, export, admin.
+Include order is preserved from before this migration: auth (users),
+notes, folders, search, tags, upload, public, comments, export, admin.
+`preferences` (new — see modules/preferences) is appended at the end
+since nothing else depends on it.
 """
 
 from fastapi import APIRouter
@@ -13,6 +13,7 @@ from .modules.comments.router import router as comments_router
 from .modules.export.router import router as export_router
 from .modules.folders.router import router as folders_router
 from .modules.notes.router import router as notes_router
+from .modules.preferences.router import router as preferences_router
 from .modules.public.router import router as public_router
 from .modules.search.router import router as search_router
 from .modules.tags.router import router as tags_router
@@ -31,3 +32,4 @@ api_router.include_router(public_router)
 api_router.include_router(comments_router)
 api_router.include_router(export_router)
 api_router.include_router(admin_router)
+api_router.include_router(preferences_router)

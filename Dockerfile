@@ -9,9 +9,10 @@
 # =============================================================================
 FROM python:3.11-slim-bookworm AS builder
 
-# bcrypt / pydantic-core ship prebuilt wheels for common platforms, but keep
-# a compiler around in the builder in case a wheel isn't available for the
-# host's target architecture. Discarded before the final stage regardless.
+# bcrypt / pydantic-core / asyncpg ship prebuilt wheels for common
+# platforms, but keep a compiler around in the builder in case a wheel
+# isn't available for the host's target architecture. Discarded before the
+# final stage regardless.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -57,19 +58,19 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# MONGO_URL, DB_NAME, CORS_ORIGINS, JWT_SECRET_KEY, JWT_ALGORITHM,
+# DATABASE_URL, CORS_ORIGINS, JWT_SECRET_KEY, JWT_ALGORITHM,
 # ACCESS_TOKEN_EXPIRE_MINUTES are intentionally NOT set here — provide them
 # at `docker run -e ...`, a compose env_file, or your orchestrator's own
 # secrets mechanism. Never bake real credentials into the image itself; see
 # .env.example for the full list this app reads at startup.
 USER appuser
 
-EXPOSE 5000
+EXPOSE 8000
 
 # Hits the app's own /api/health route (see app/main.py) using Python's
 # stdlib instead of curl, so the runtime image doesn't need curl installed
 # just for this one check.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -8,8 +8,8 @@ from .core.config import get_settings
 from .core.exceptions import register_exception_handlers
 from .core.logging import configure_logging
 from .core.middleware import RequestCounterMiddleware, RequestIdMiddleware
-from .db.indexes import ensure_indexes
-from .db.mongo import close as close_mongo
+from .db.postgres import close as close_db
+from .db.postgres import init_db
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -17,13 +17,15 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Replaces the deprecated @app.on_event("startup") — same single call,
-    # same timing (before the app starts accepting requests).
-    await ensure_indexes()
+    # Postgres equivalent of the old ensure_indexes() call — creates every
+    # table/index declared in db/models.py that doesn't already exist yet.
+    # Same timing as before: runs once, before the app starts accepting
+    # requests.
+    await init_db()
     yield
-    # New: today's Motor client is never closed at all. Closing it on
-    # shutdown doesn't change anything a caller can observe.
-    await close_mongo()
+    # Disposes the connection pool on shutdown — same spot the Motor
+    # client's close() used to run from.
+    await close_db()
 
 
 def create_app() -> FastAPI:
@@ -51,8 +53,7 @@ def create_app() -> FastAPI:
     # Middleware order here is load-bearing: Starlette applies middleware
     # outside-in in the order add_middleware is called, so CORS (added
     # first) is outermost, RequestIdMiddleware sits inside it, and
-    # RequestCounterMiddleware (added last) is innermost — preserving the
-    # original "counter runs after CORS" property from app/main.py.
+    # RequestCounterMiddleware (added last) is innermost.
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(RequestCounterMiddleware)
 

@@ -1,17 +1,18 @@
-"""Mongo document -> response schema mapping for users — moved from
-routers/auth.py's _user_out()."""
+"""ORM object -> response schema mapping for users."""
 
+from ...db.models import User
+from ...shared.datetime import iso
 from ...shared.dependencies import is_admin_email
 from .schemas import UserOut
 
 
-def to_user_out(doc: dict) -> UserOut:
+def to_user_out(user: User) -> UserOut:
     return UserOut(
-        id=str(doc["_id"]),
-        username=doc.get("username", ""),
-        email=doc["email"],
-        is_verified=doc.get("is_verified", False),
-        is_admin=is_admin_email(doc.get("email")),
-        created_at=doc.get("created_at", ""),
-        updated_at=doc.get("updated_at", doc.get("created_at", "")),
+        id=str(user.id),
+        username=user.username or "",
+        email=user.email,
+        is_verified=user.is_verified,
+        is_admin=is_admin_email(user.email),
+        created_at=iso(user.created_at),
+        updated_at=iso(user.updated_at, iso(user.created_at)),
     )

@@ -1,7 +1,7 @@
 [project]
 name = "vault-backend"
 version = "1.0.0"
-description = "FastAPI + MongoDB backend for a personal Obsidian-like markdown vault"
+description = "FastAPI + Postgres backend for a personal Obsidian-like markdown vault"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.115.0",
@@ -11,7 +11,15 @@ dependencies = [
     # (uv resolves one lockfile covering base deps + every optional group).
     # No known FastAPI 0.115 incompatibility with newer uvicorn 0.3x.
     "uvicorn[standard]>=0.30.6,<1.0",
-    "motor==3.6.0",
+    # Postgres migration: motor (Mongo's async driver) is gone. SQLAlchemy's
+    # asyncio extension is the ORM layer (see app/db/models.py/postgres.py);
+    # asyncpg is the actual async Postgres driver underneath it
+    # (`postgresql+asyncpg://...` in DATABASE_URL). alembic is the migration
+    # tool for schema changes going forward — see backend/alembic/ and
+    # POSTGRES_MIGRATION.md.
+    "sqlalchemy[asyncio]>=2.0.30,<3.0",
+    "asyncpg>=0.29.0,<1.0",
+    "alembic>=1.13.0,<2.0",
     # >=2.9.2 (was exact ==2.9.2 on both lines) — same reasoning as the
     # uvicorn/python-dotenv relaxes above: fastmcp requires
     # pydantic[email]>=2.11.7. FastAPI 0.115 is fine with newer pydantic 2.x.
@@ -28,8 +36,9 @@ dependencies = [
     "pyjwt>=2.9.0,<3.0",
     "bcrypt==4.2.0",
     # Mailgun's HTTP API for sending the signup verification email
-    # (app/email.py) — already an mcp-extra dep below for mcp_server's own
-    # REST client, promoted to a base dep now that the core app needs it too.
+    # (modules/users/email.py) — already an mcp-extra dep below for
+    # mcp_server's own REST client, promoted to a base dep now that the
+    # core app needs it too.
     "httpx>=0.27.0,<1.0",
     # Already resolved transitively via fastmcp/mcp (see uv.lock) at 2.15.0 —
     # promoted to a direct core dep now that app/core/config.py imports it
@@ -75,9 +84,9 @@ dependencies = [
 [project.optional-dependencies]
 mcp = [
     "fastmcp>=3.0,<4",
-    # httpx itself now lives in the base deps above (app/email.py uses it
-    # too) — kept listed here as well since this extra's own README /
-    # install instructions reference it directly.
+    # httpx itself now lives in the base deps above (modules/users/email.py
+    # uses it too) — kept listed here as well since this extra's own
+    # README / install instructions reference it directly.
     "httpx>=0.27.0",
 ]
 
@@ -90,10 +99,10 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-# One event loop for the whole test session (default is function-scoped),
-# so the Motor client — a module-level global created once at import — is
-# never handed to a second event loop mid-session, which raises
-# "Future/Task attached to a different loop".
+# One event loop for the whole test session (default is function-scoped) —
+# kept from the Mongo-era config; SQLAlchemy's async engine has the same
+# "don't hand a connection pool to a second event loop mid-session" concern
+# Motor's client did.
 asyncio_default_fixture_loop_scope = "session"
 
 [tool.ruff]

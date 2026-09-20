@@ -1,0 +1,72 @@
+# Local development only. docker-compose.yml as committed no longer runs a
+# Postgres container at all — production points DATABASE_URL at a managed
+# instance instead (AWS RDS — see .env.example) — so local dev's own
+# Postgres container lives entirely here now. This file is never deployed
+# (.github/workflows/deploy_ec2.yaml only copies docker-compose.yml itself),
+# so nothing here reaches production.
+#
+# Compose merges this automatically alongside docker-compose.yml whenever
+# you run `docker compose up ...` from this directory.
+services:
+  # Same image/credentials docker-compose.yml's `postgres` service used to
+  # ship before the move to a managed instance — moved here rather than
+  # deleted, so `docker compose up` still gives you a full local stack to
+  # test against.
+  postgres:
+    image: postgres:16-alpine
+    container_name: mdstack_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=mdstack
+      - POSTGRES_PASSWORD=mdstack
+      - POSTGRES_DB=mdstack
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - app-network
+    # Published to the host (unlike the old prod setup) so `uv run alembic`
+    # / `uv run uvicorn` running directly on your machine (outside Docker)
+    # can reach it at localhost:5432 too — matching backend/.env's
+    # DATABASE_URL default in .env.example.
+    ports:
+      - "5432:5432"
+
+  backend:
+    # Build from the local Dockerfile instead of pulling the CI-built image
+    # docker-compose.yml names. Compose merges this on top of that file's
+    # `image:` line, so the locally-built result just gets tagged with that
+    # same name — and because this override file is never deployed,
+    # production still pulls the pre-built image from Docker Hub untouched.
+    #
+    # Why bother: local dev should run the code in your working tree, not
+    # whatever CI last pushed to `latest` from master — and pulling that
+    # image locally has its own failure mode (a stale or half-pulled copy
+    # surfaces as `unable to find user appuser: no matching entries in
+    # passwd file`, since the image config says USER appuser but the cached
+    # layers don't carry the useradd from Dockerfile's runtime stage).
+    # Building here sidesteps both.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Only takes effect if you run the *full* stack locally with
+    # `docker compose up` (backend included, not just `docker compose up
+    # postgres`) — points the containerized backend at this containerized
+    # Postgres over the compose network's own DNS, since "localhost" inside
+    # the backend container would mean itself, not this postgres container.
+    # Running backend outside Docker instead just uses .env.example's
+    # localhost:5432 default against the published port above.
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mdstack:mdstack@postgres:5432/mdstack
+    depends_on:
+      - postgres
+    # Published to the host for the same reason as postgres above — hit it
+    # directly at localhost:8000 while developing, without needing nginx
+    # (which isn't part of this local stack at all) in front of it.
+    # docker-compose.yml deliberately leaves this unpublished in production
+    # (nginx is the only public entrypoint there); this override-only file
+    # is never deployed, so that stays true regardless of what's added here.
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

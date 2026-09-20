@@ -1,40 +1,52 @@
-"""All Motor calls for the comments collection — moved from
-app/routers/public.py (queries) and app/utils.py's comment_counts (the
-batch aggregation, now counts_for_notes below)."""
+"""All SQLAlchemy queries for the comments table."""
 
-from bson import ObjectId
-from pymongo import ReturnDocument
+import uuid
 
-from ...db.collections import comments_collection
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-
-async def list_by_note(note_id: str) -> list[dict]:
-    cursor = comments_collection.find({"note_id": note_id}).sort("created_at", 1)
-    return [doc async for doc in cursor]
+from ...db.models import Comment
 
 
-async def insert(doc: dict) -> ObjectId:
-    result = await comments_collection.insert_one(doc)
-    return result.inserted_id
+async def list_by_note(session: AsyncSession, note_id: uuid.UUID) -> list[Comment]:
+    result = await session.execute(select(Comment).where(Comment.note_id == note_id).order_by(Comment.created_at.asc()))
+    return list(result.scalars().all())
 
 
-async def upvote(comment_oid: ObjectId, note_id: str) -> dict | None:
-    return await comments_collection.find_one_and_update(
-        {"_id": comment_oid, "note_id": note_id},
-        {"$inc": {"upvotes": 1}},
-        return_document=ReturnDocument.AFTER,
+async def insert(session: AsyncSession, comment: Comment) -> Comment:
+    session.add(comment)
+    await session.flush()
+    return comment
+
+
+async def upvote(session: AsyncSession, comment_id: uuid.UUID, note_id: uuid.UUID) -> Comment | None:
+    result = await session.execute(
+        select(Comment).where(Comment.id == comment_id, Comment.note_id == note_id)
     )
+    comment = result.scalar_one_or_none()
+    if comment is None:
+        return None
+    comment.upvotes += 1
+    await session.flush()
+    return comment
 
 
-async def counts_for_notes(note_ids: list) -> dict:
-    """Batch note_id -> comment count in one aggregation, instead of one
-    comments_collection round trip per note in a list — used by the
-    anonymous Explore feed (modules/public) and "my published notes"
-    (modules/notes) so both render comment counts identically."""
-    if not note_ids:
+async def counts_for_notes(session: AsyncSession, note_ids: list[str]) -> dict[str, int]:
+    """Batch note_id (str) -> comment count in one query, instead of one
+    round trip per note in a list — used by the anonymous Explore feed
+    (modules/public) and "my published notes" (modules/notes) so both
+    render comment counts identically. Takes/returns plain id strings
+    (matching how every call site already has them, from `str(note.id)`)
+    rather than pushing uuid.UUID conversion onto every caller."""
+    uuids: list[uuid.UUID] = []
+    for note_id in note_ids:
+        try:
+            uuids.append(uuid.UUID(note_id))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    if not uuids:
         return {}
-    pipeline = [
-        {"$match": {"note_id": {"$in": note_ids}}},
-        {"$group": {"_id": "$note_id", "count": {"$sum": 1}}},
-    ]
-    return {doc["_id"]: doc["count"] async for doc in comments_collection.aggregate(pipeline)}
+    result = await session.execute(
+        select(Comment.note_id, func.count(Comment.id)).where(Comment.note_id.in_(uuids)).group_by(Comment.note_id)
+    )
+    return {str(note_id): count for note_id, count in result.all()}

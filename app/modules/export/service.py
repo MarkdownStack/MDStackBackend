@@ -1,20 +1,21 @@
-"""Business logic for /api/export — moved from app/routers/export.py.
-Behavior unchanged; HTTPException replaced with the equivalent domain
-exception.
+"""Business logic for /api/export.
 
-One real fix folded into this migration (flagged in PLAN.md as a known
-duplication, deliberately left alone until this exact module existed):
-the folder-scope regex below now calls shared/paths.py's
-folder_scope_pattern() instead of rebuilding the identical
-`f"^{re.escape(p)}(/.*)?$"` pattern inline a second time."""
+Folder-scope matching (for a partial export) now goes through
+shared/paths.folder_scope_clause() — a Postgres LIKE-based WHERE clause,
+not the regex the pre-migration version built with
+`f"^{re.escape(p)}(/.*)?$"` (see modules/export/repository.py). Filename
+sanitizing below was also switched off `re.sub()` onto plain character
+scanning, per this migration's "no regular expressions" brief."""
 
 import io
-import re
+import uuid
 import zipfile
 from datetime import datetime, timezone
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from ...core.exceptions import BadRequestError, NotFoundError
-from ...shared.paths import folder_scope_pattern, normalize_folder_path
+from ...shared.paths import normalize_folder_path
 from . import repository
 
 # Same "only these are real note content" list modules/upload uses — kept
@@ -22,7 +23,9 @@ from . import repository
 # own; .md is what round-trips cleanly back through the upload importer.
 NOTE_EXTENSION = ".md"
 
-_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+# Characters illegal in a filename on Windows/macOS/Linux — a note title
+# is free-form text and may contain any of them.
+_INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
 
 
 def sanitize_filename(name: str) -> str:
@@ -30,7 +33,8 @@ def sanitize_filename(name: str) -> str:
     (a note title is free-form text and may contain any of them) so the zip
     extracts cleanly everywhere, not just on whatever OS the note was
     originally written on."""
-    cleaned = _INVALID_FILENAME_CHARS.sub("_", name or "").strip().rstrip(".")
+    cleaned_chars = [("_" if ch in _INVALID_FILENAME_CHARS else ch) for ch in (name or "")]
+    cleaned = "".join(cleaned_chars).strip().rstrip(".")
     return cleaned or "untitled"
 
 
@@ -49,7 +53,9 @@ def unique_filename(used: set, base: str, ext: str) -> str:
     return candidate
 
 
-async def export_notes(owner_id: str, folder_paths: list[str], export_all: bool) -> tuple[io.BytesIO, str]:
+async def export_notes(
+    db: AsyncSession, owner_id: uuid.UUID, folder_paths: list[str], export_all: bool
+) -> tuple[io.BytesIO, str]:
     """Bundle the vault (or a chosen subset of its folders) into a .zip.
     Folder structure is recreated exactly, including folders that have no
     notes of their own directly inside them (only subfolders), so
@@ -59,22 +65,15 @@ async def export_notes(owner_id: str, folder_paths: list[str], export_all: bool)
     stream.
     """
     if export_all:
-        note_query: dict = {"owner_id": owner_id}
-        folder_query: dict = {"owner_id": owner_id}
+        selected_paths = None
     else:
         selected = sorted({normalize_folder_path(p) for p in folder_paths if normalize_folder_path(p)})
         if not selected:
             raise BadRequestError('Select at least one folder, or choose "All"')
-        # Anchored + escaped, same scoping the recursive folder-delete uses:
-        # each selected path pulls in itself, its notes, and everything
-        # nested under it — never an unrelated sibling that happens to share
-        # a prefix (selecting "notes" must not also grab "notes-archive").
-        or_clauses = [{"$regex": folder_scope_pattern(p)} for p in selected]
-        note_query = {"owner_id": owner_id, "$or": [{"folder_path": c} for c in or_clauses]}
-        folder_query = {"owner_id": owner_id, "$or": [{"path": c} for c in or_clauses]}
+        selected_paths = selected
 
-    notes = await repository.find_notes(note_query)
-    folders = await repository.find_folders(folder_query)
+    notes = await repository.find_notes(db, owner_id, selected_paths)
+    folders = await repository.find_folders(db, owner_id, selected_paths)
 
     if not notes and not folders:
         raise NotFoundError("Nothing to export in the selected folder(s)")
@@ -86,7 +85,7 @@ async def export_notes(owner_id: str, folder_paths: list[str], export_all: bool)
         # sitting there as an organizational placeholder) still shows up
         # when the zip is extracted — without this, only folders that
         # happen to contain a note would survive the round trip.
-        all_dir_paths = {f["path"] for f in folders} | {n["folder_path"] for n in notes if n.get("folder_path")}
+        all_dir_paths = {f.path for f in folders} | {n.folder_path for n in notes if n.folder_path}
         written_dirs = set()
         for path in sorted(all_dir_paths):
             parts = path.split("/")
@@ -101,11 +100,11 @@ async def export_notes(owner_id: str, folder_paths: list[str], export_all: bool)
         # need the " (n)" suffix.
         used_by_dir: dict = {}
         for note in notes:
-            folder_path = note.get("folder_path") or ""
+            folder_path = note.folder_path or ""
             used = used_by_dir.setdefault(folder_path, set())
-            filename = unique_filename(used, sanitize_filename(note.get("title") or "untitled"), NOTE_EXTENSION)
+            filename = unique_filename(used, sanitize_filename(note.title or "untitled"), NOTE_EXTENSION)
             full_path = f"{folder_path}/{filename}" if folder_path else filename
-            zf.writestr(full_path, note.get("content") or "")
+            zf.writestr(full_path, note.content or "")
 
     buffer.seek(0)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

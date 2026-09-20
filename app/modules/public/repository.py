@@ -1,64 +1,86 @@
-"""All Motor calls the /api/public note/folder routes need — moved from
-app/routers/public.py (queries) and app/database.py (collection handles).
+"""All SQLAlchemy queries the /api/public note/folder routes need.
 
 count_comments_for_note below is the one exception to "comments belong to
 modules/comments": it's the exact single-note count the original code ran
-directly against comments_collection (not through any comments
+directly against the comments table (not through any comments
 abstraction), kept here rather than imported from modules/comments so this
 module and modules/comments don't end up needing each other's service
 layer — see modules/comments/service.py's own note on the one-way
 dependency this keeps (comments -> public, never the reverse).
 """
 
-from bson import ObjectId
-from pymongo import ReturnDocument
+import uuid
 
-from ...db.collections import comments_collection, folders_collection, notes_collection
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-
-async def find_public_note(note_oid: ObjectId) -> dict | None:
-    return await notes_collection.find_one({"_id": note_oid, "is_public": True})
-
-
-async def find_public_folder(folder_oid: ObjectId) -> dict | None:
-    return await folders_collection.find_one({"_id": folder_oid, "is_public": True})
+from ...db.models import Comment, Folder, Note
+from ...shared.paths import folder_scope_clause
 
 
-async def count_comments_for_note(note_id: str) -> int:
-    return await comments_collection.count_documents({"note_id": note_id})
-
-
-async def list_public_notes(query: dict, limit: int) -> list[dict]:
-    cursor = notes_collection.find(query).sort([("upvotes", -1), ("updated_at", -1)]).limit(limit)
-    return [doc async for doc in cursor]
-
-
-async def vote_note(note_oid: ObjectId, up_delta: int, down_delta: int) -> dict:
-    return await notes_collection.find_one_and_update(
-        {"_id": note_oid},
-        [
-            {
-                "$set": {
-                    "upvotes": {"$max": [0, {"$add": [{"$ifNull": ["$upvotes", 0]}, up_delta]}]},
-                    "downvotes": {"$max": [0, {"$add": [{"$ifNull": ["$downvotes", 0]}, down_delta]}]},
-                }
-            }
-        ],
-        return_document=ReturnDocument.AFTER,
+async def find_public_note(session: AsyncSession, note_id: uuid.UUID) -> Note | None:
+    result = await session.execute(
+        select(Note).options(selectinload(Note.tags)).where(Note.id == note_id, Note.is_public.is_(True))
     )
+    return result.scalar_one_or_none()
 
 
-async def list_public_folders(query: dict, limit: int) -> list[dict]:
-    cursor = folders_collection.find(query).sort("updated_at", -1).limit(limit)
-    return [doc async for doc in cursor]
+async def find_public_folder(session: AsyncSession, folder_id: uuid.UUID) -> Folder | None:
+    result = await session.execute(select(Folder).where(Folder.id == folder_id, Folder.is_public.is_(True)))
+    return result.scalar_one_or_none()
 
 
-async def list_notes_in_folder(owner_id: str, pattern: str) -> list[dict]:
-    cursor = notes_collection.find({"owner_id": owner_id, "folder_path": {"$regex": pattern}}).sort(
-        [("folder_path", 1), ("title", 1)]
+async def count_comments_for_note(session: AsyncSession, note_id: uuid.UUID) -> int:
+    result = await session.execute(select(func.count()).select_from(Comment).where(Comment.note_id == note_id))
+    return result.scalar_one()
+
+
+async def list_public_notes(session: AsyncSession, exclude_owner_id: uuid.UUID | None, limit: int) -> list[Note]:
+    query = select(Note).options(selectinload(Note.tags)).where(Note.is_public.is_(True))
+    if exclude_owner_id is not None:
+        query = query.where(Note.owner_id != exclude_owner_id)
+    query = query.order_by(Note.upvotes.desc(), Note.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def vote_note(session: AsyncSession, note_id: uuid.UUID, up_delta: int, down_delta: int) -> Note:
+    """Clamped in plain Python (`max(0, ...)`), not a SQL `GREATEST()`
+    expression — assigning a SQL expression to an ORM attribute leaves it
+    "expired" until a follow-up `session.refresh()`, which is easy to get
+    wrong under asyncio (see db/models.py's User.updated_at comment on the
+    same trap). A plain int assignment needs no refresh at all. Note this
+    deliberately never touches `updated_at` — same as the old Mongo
+    version, voting doesn't count as "updating" a note for feed-sorting
+    purposes."""
+    note = await session.get(Note, note_id, options=[selectinload(Note.tags)])
+    note.upvotes = max(0, note.upvotes + up_delta)
+    note.downvotes = max(0, note.downvotes + down_delta)
+    await session.flush()
+    return note
+
+
+async def list_public_folders(session: AsyncSession, exclude_owner_id: uuid.UUID | None, limit: int) -> list[Folder]:
+    query = select(Folder).where(Folder.is_public.is_(True))
+    if exclude_owner_id is not None:
+        query = query.where(Folder.owner_id != exclude_owner_id)
+    query = query.order_by(Folder.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def list_notes_in_folder(session: AsyncSession, owner_id: uuid.UUID, path: str) -> list[Note]:
+    query = (
+        select(Note)
+        .options(selectinload(Note.tags))
+        .where(Note.owner_id == owner_id, folder_scope_clause(Note.folder_path, path))
+        .order_by(Note.folder_path.asc(), Note.title.asc())
     )
-    return [doc async for doc in cursor]
+    result = await session.execute(query)
+    return list(result.scalars().all())
 
 
-async def find_note_by_owner(owner_id: str, note_oid: ObjectId) -> dict | None:
-    return await notes_collection.find_one({"_id": note_oid, "owner_id": owner_id})
+async def find_note_by_owner(session: AsyncSession, owner_id: uuid.UUID, note_id: uuid.UUID) -> Note | None:
+    result = await session.execute(select(Note).where(Note.id == note_id, Note.owner_id == owner_id))
+    return result.scalar_one_or_none()

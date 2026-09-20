@@ -1,16 +1,17 @@
-"""Mongo document -> response schema mapping for comments — moved from
-routers/public.py's serialize_comment()."""
+"""ORM object -> response schema mapping for comments."""
 
+from ...db.models import Comment
+from ...shared.datetime import iso
 from .schemas import CommentOut
 
 
-def to_comment_out(doc: dict, author: str) -> CommentOut:
+def to_comment_out(comment: Comment, author: str) -> CommentOut:
     return CommentOut(
-        id=str(doc["_id"]),
-        note_id=doc["note_id"],
+        id=str(comment.id),
+        note_id=str(comment.note_id),
         author=author,
-        content=doc.get("content", ""),
-        upvotes=doc.get("upvotes", 0),
-        created_at=doc.get("created_at", ""),
-        updated_at=doc.get("updated_at", ""),
+        content=comment.content,
+        upvotes=comment.upvotes,
+        created_at=iso(comment.created_at),
+        updated_at=iso(comment.updated_at),
     )
