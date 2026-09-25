@@ -12,6 +12,7 @@ public router to avoid route shadowing.
 from fastapi import APIRouter
 
 from .modules.admin.router import router as admin_router
+from .modules.chat.router import router as chat_router
 from .modules.comments.router import router as comments_router
 from .modules.export.router import router as export_router
 from .modules.folders.router import router as folders_router
@@ -37,4 +38,5 @@ api_router.include_router(comments_router)
 api_router.include_router(export_router)
 api_router.include_router(admin_router)
 api_router.include_router(preferences_router)
+api_router.include_router(chat_router)
 api_router.include_router(slugs_router)
