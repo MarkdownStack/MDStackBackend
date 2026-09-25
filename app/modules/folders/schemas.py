@@ -26,3 +26,7 @@ class FolderOut(BaseModel):
 # inside it is individually published. See service.py.
 class FolderPublishUpdate(BaseModel):
     is_public: bool
+
+
+class FolderRename(BaseModel):
+    new_name: str

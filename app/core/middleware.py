@@ -2,11 +2,10 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from ..db.postgres import session_scope
+from ..db.postgres import engine
 
 
 class RequestCounterMiddleware(BaseHTTPMiddleware):
@@ -26,6 +25,15 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
     endpoints themselves are excluded — none of them are "real" traffic,
     and counting /api/admin/* would mean checking the dashboard bumps the
     very number you're looking at.
+
+    Implementation note: _record uses engine.begin() (a raw connection) rather
+    than session_scope() (an ORM AsyncSession). AsyncSession internally uses
+    SQLAlchemy's greenlet_spawn bridge to hand off between sync and async code;
+    that bridge is only set up when the session is entered from within a request
+    handler (a FastAPI Depends call), not from a bare asyncio.Task. A raw
+    async connection acquired directly from the engine has no greenlet layer at
+    all — it's purely async all the way down — so it works correctly from a
+    fire-and-forget create_task with no MissingGreenlet trap.
     """
 
     SKIP_PATHS = {"/api/health"}
@@ -48,26 +56,27 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
     async def _record(method: str) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         try:
-            async with session_scope() as session:
-                # The Postgres equivalent of the old Mongo
-                # $inc: {count: 1, f"methods.{method}": 1} upsert — one row
-                # per UTC day, an atomic upsert so two concurrent requests
-                # on the same day never race each other's increment.
-                # Every :method bind is cast to (…)::text explicitly, in
-                # parentheses — two things going on:
-                #   1. Left uncast, asyncpg can't infer a type for it
-                #      inside jsonb_build_object()/ARRAY[] on its own
-                #      (raises AmbiguousParameterError).
-                #   2. `:method::text` *without* the parentheses silently
-                #      fails to bind at all — SQLAlchemy's text() reserves
-                #      bare `name::type` for a literal Postgres cast on a
-                #      column, so it never treats that `:method` as a bind
-                #      parameter and leaves the literal text
-                #      "':method::text'" in the SQL untouched. Wrapping the
-                #      bind in parens (`(:method)::text`) sidesteps that
-                #      entirely — confirmed against a real Postgres in this
-                #      migration's smoke test.
-                await session.execute(
+            # engine.begin() gives a raw AsyncConnection (no ORM session, no
+            # greenlet bridge) — safe to call from a bare asyncio.Task.
+            # The SQL itself is identical to what session_scope() ran before;
+            # only the acquisition path changed.
+            # Every :method bind is cast to (…)::text explicitly, in
+            # parentheses — two things going on:
+            #   1. Left uncast, asyncpg can't infer a type for it
+            #      inside jsonb_build_object()/ARRAY[] on its own
+            #      (raises AmbiguousParameterError).
+            #   2. `:method::text` *without* the parentheses silently
+            #      fails to bind at all — SQLAlchemy's text() reserves
+            #      bare `name::type` for a literal Postgres cast on a
+            #      column, so it never treats that `:method` as a bind
+            #      parameter and leaves the literal text
+            #      "':method::text'" in the SQL untouched. Wrapping the
+            #      bind in parens (`(:method)::text`) sidesteps that
+            #      entirely — confirmed against a real Postgres in this
+            #      migration's smoke test.
+            from sqlalchemy import text
+            async with engine.begin() as conn:
+                await conn.execute(
                     text(
                         """
                         INSERT INTO request_stats (date, count, methods)

@@ -24,6 +24,67 @@ async def list_implied_paths(session: AsyncSession, owner_id: uuid.UUID) -> set[
     return set(result.scalars().all())
 
 
+async def find_by_id(session: AsyncSession, owner_id: uuid.UUID, folder_id: uuid.UUID) -> Folder | None:
+    """Fetch a folder by primary key, scoped to the owner — used by
+    slugs/service.py to confirm that the caller owns the folder they're
+    setting a slug for before we touch the slug_redirects table."""
+    result = await session.execute(
+        select(Folder).where(Folder.id == folder_id, Folder.owner_id == owner_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def rename_scope(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+    old_path: str,
+    new_path: str,
+    ts: datetime,
+) -> None:
+    """Rewrite every folder row and every note whose path starts with
+    old_path (exact match or old_path + "/") to use new_path instead.
+    Uses string replacement on the path prefix so deeply-nested children
+    like old_path/sub/deep become new_path/sub/deep correctly."""
+    from sqlalchemy import update
+    from ...db.models import Note
+
+    # Exact folder row match.
+    await session.execute(
+        update(Folder)
+        .where(Folder.owner_id == owner_id, Folder.path == old_path)
+        .values(path=new_path, updated_at=ts)
+    )
+    # Child folder rows (old_path/...).
+    result = await session.execute(
+        select(Folder).where(
+            Folder.owner_id == owner_id,
+            Folder.path.like(old_path + "/%"),
+        )
+    )
+    for folder in result.scalars().all():
+        folder.path = new_path + folder.path[len(old_path):]
+        folder.updated_at = ts
+
+    # Notes at the exact folder path.
+    await session.execute(
+        update(Note)
+        .where(Note.owner_id == owner_id, Note.folder_path == old_path)
+        .values(folder_path=new_path, updated_at=ts)
+    )
+    # Notes inside child paths.
+    result = await session.execute(
+        select(Note).where(
+            Note.owner_id == owner_id,
+            Note.folder_path.like(old_path + "/%"),
+        )
+    )
+    for note in result.scalars().all():
+        note.folder_path = new_path + note.folder_path[len(old_path):]
+        note.updated_at = ts
+
+    await session.flush()
+
+
 async def find_by_path(session: AsyncSession, owner_id: uuid.UUID, path: str) -> Folder | None:
     result = await session.execute(select(Folder).where(Folder.owner_id == owner_id, Folder.path == path))
     return result.scalar_one_or_none()

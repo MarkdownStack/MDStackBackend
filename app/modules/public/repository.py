@@ -82,5 +82,16 @@ async def list_notes_in_folder(session: AsyncSession, owner_id: uuid.UUID, path:
 
 
 async def find_note_by_owner(session: AsyncSession, owner_id: uuid.UUID, note_id: uuid.UUID) -> Note | None:
-    result = await session.execute(select(Note).where(Note.id == note_id, Note.owner_id == owner_id))
+    # selectinload(Note.tags) is NOT optional here, even though this returns
+    # a single row: the only caller (modules/public/service.py's
+    # get_public_folder_note) hands the result to to_public_folder_note_out(),
+    # which reads note.tags. Under the async engine a relationship that
+    # wasn't eager-loaded can't be lazy-loaded on attribute access — SQLAlchemy
+    # raises MissingGreenlet rather than quietly emitting a second SELECT the
+    # way the sync API would — so leaving it off turned every "open a note
+    # inside a published folder" request into a 500. list_notes_in_folder()
+    # above already loads tags for exactly the same reason; these two have to
+    # stay in step, since both feed the same serializer.
+    query = select(Note).options(selectinload(Note.tags)).where(Note.id == note_id, Note.owner_id == owner_id)
+    result = await session.execute(query)
     return result.scalar_one_or_none()

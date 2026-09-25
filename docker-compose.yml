@@ -7,10 +7,13 @@ services:
   # backend's DATABASE_URL below comes straight from ./.env (see
   # .env.example's "Production" section) rather than being overridden to
   # point at a local container. Local dev still runs its own Postgres in
-  # Docker — see docker-compose.override.yml, which adds that service (and
-  # the matching DATABASE_URL/depends_on for `backend`) back in, and is
-  # never deployed here (.github/workflows/deploy_ec2.yaml only copies this
-  # file itself).
+  # Docker — see docker-compose.local.yml, which adds that service (and
+  # the matching DATABASE_URL/depends_on for `backend`) back in. That file
+  # IS committed and DOES land on the EC2 box (deploy_ec2.yaml syncs the
+  # whole repo with `git reset --hard`), so what keeps it out of production
+  # is purely its name: Compose auto-merges only `docker-compose.override
+  # .yml`, and the box runs a bare `docker compose up -d`. Do not rename it
+  # back.
   backend:
     image: parimalmahindrakar/mdstack_backend:latest
     # Built and pushed by .github/workflows/deploy_ec2.yaml on every push to

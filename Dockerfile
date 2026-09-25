@@ -54,6 +54,15 @@ WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --from=builder --chown=appuser:appuser /app/app ./app
 
+# Migrations ship with the image so `docker compose exec backend alembic
+# upgrade head` works on a deployed box. Copied from the build context, not
+# the builder stage — the builder only handles `app` while building the
+# venv. alembic itself is a runtime dependency (pyproject.toml), so
+# /app/.venv/bin/alembic is already on PATH below; without these two lines
+# the binary is there but has no alembic.ini and no versions/ to read.
+COPY --chown=appuser:appuser alembic ./alembic
+COPY --chown=appuser:appuser alembic.ini ./
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

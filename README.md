@@ -227,7 +227,7 @@ The backend ships a multi-stage `Dockerfile` (uv-based builder → slim non-root
    ```bash
    docker run -d \
      --name markdownstack-backend \
-     -p 5000:5000 \
+     -p 8000:8000 \
      -e MONGO_URL="mongodb://host.docker.internal:27017" \
      -e DB_NAME="vault" \
      -e JWT_SECRET_KEY="change-this-to-a-long-random-string" \
@@ -240,12 +240,12 @@ The backend ships a multi-stage `Dockerfile` (uv-based builder → slim non-root
 
 4. **Verify it's up**:
    ```bash
-   curl http://localhost:5000/api/health
+   curl http://localhost:8000/api/health
    # {"status":"ok"}
    ```
    The image also has a built-in `HEALTHCHECK` hitting the same endpoint every 30s, so `docker ps` will show `(healthy)`/`(unhealthy)` once it settles.
 
-5. API docs: http://localhost:5000/docs
+5. API docs: http://localhost:8000/docs
 
 To rebuild after code changes: `docker build -t markdownstack-backend .` again (the Dockerfile's layer order means dependency installs are cached and only your app code re-copies, so rebuilds are fast).
 
@@ -299,9 +299,9 @@ Note this won't pin the exact versions in `uv.lock` — it resolves against the 
 
 ## Option C — docker-compose (API + nginx; Postgres in Docker locally, AWS RDS in production)
 
-`backend/docker-compose.yml` wires up this API (as `backend`), the MCP server (as `mcp`), and the reverse proxy in `nginx/` on a shared `app-network`, matching what `nginx.conf`'s upstream (`backend:5000`) expects. It does **not** define a Postgres service anymore — `backend`'s `DATABASE_URL` is read straight from `./.env`, and what you put there depends on which of the two setups below you're running:
+`backend/docker-compose.yml` wires up this API (as `backend`), the MCP server (as `mcp`), and the reverse proxy in `nginx/` on a shared `app-network`, matching what `nginx.conf`'s upstream (`backend:8000`) expects. It does **not** define a Postgres service anymore — `backend`'s `DATABASE_URL` is read straight from `./.env`, and what you put there depends on which of the two setups below you're running:
 
-- **Local dev**: `docker-compose.override.yml` (git-ignored-in-spirit, dev-only, never deployed) adds a `postgres` service back in and points `backend`'s `DATABASE_URL` at it automatically when both files are present — which they are by default, since Compose merges an `docker-compose.override.yml` next to `docker-compose.yml` without you asking for it. It also publishes Postgres on `localhost:5432` so `uv run alembic` / a local `psql` can reach it even if you're running the backend itself outside Docker.
+- **Local dev**: `docker-compose.local.yml` adds a `postgres` service back in, points `backend`'s `DATABASE_URL` at it, and builds the backend from your working tree instead of pulling the CI image. You must name it explicitly — `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d` — or set `COMPOSE_FILE=docker-compose.yml:docker-compose.local.yml` in your own (gitignored) `.env`. It is deliberately **not** called `docker-compose.override.yml`: that name is auto-merged by Compose with no flags, and since the deploy syncs every tracked file to EC2, the old name meant production silently ran the local Postgres and ignored RDS. It also publishes Postgres on `localhost:5432` so `uv run alembic` / a local `psql` can reach it even if you're running the backend itself outside Docker.
 - **Production**: only `docker-compose.yml` is deployed (see below) — no local Postgres container exists at all. Set `DATABASE_URL` in the EC2 box's `./.env` to your RDS instance's connection string instead — a plain, direct Postgres connection (`.env.example`'s "Production" section has the exact format).
 
 From the `backend/` directory, for local dev:
@@ -311,7 +311,7 @@ cp .env.example .env   # local default DATABASE_URL is already correct — fill 
 docker compose up --build -d
 ```
 
-This builds the API and nginx images locally from their Dockerfiles, plus pulls `postgres:16-alpine` for the local-only Postgres container the override file adds. The API isn't published to the host directly (nginx is the only public entrypoint on 80/443) — uncomment the `ports:` block under `backend` in `docker-compose.yml` if you want to hit port 5000 directly while debugging. (Postgres itself is already published to `localhost:5432` by the override file.)
+This builds the API and nginx images locally from their Dockerfiles, plus pulls `postgres:16-alpine` for the local-only Postgres container `docker-compose.local.yml` adds. That same file publishes the API on `localhost:8000` and Postgres on `localhost:5432`, so you can hit `http://localhost:8000/api/health` (or `/docs`) directly without nginx in front.
 
 ```bash
 docker compose logs -f backend   # tail one service's logs
@@ -323,7 +323,7 @@ docker compose down              # stop everything (add -v to also drop the loca
 `.github/workflows/deploy_ec2.yaml` builds and pushes `parimalmahindrakar/mdstack_backend` to Docker Hub on every push to `master`, then SSHes into the EC2 host and runs `git pull` + `docker compose pull backend` + `docker compose build nginx` + `docker compose up -d` there. That means:
 - The production `backend/docker-compose.yml` on EC2 pulls the pre-built image (`image: parimalmahindrakar/mdstack_backend:latest`) instead of building it — the EC2 box never runs a heavy Docker build for the API, which is what filled its disk before.
 - `nginx` still builds locally on the EC2 box from `nginx/` (small, cheap build) — its image isn't published to Docker Hub yet.
-- The deploy workflow only ever copies `docker-compose.yml` itself, never `docker-compose.override.yml` — so production always runs the RDS-backed setup above, never the local Postgres container, even though both files live in the same repo.
+- The deploy syncs the **whole repo** (`git fetch` + `git reset --hard origin/master`), so every tracked file — including `docker-compose.local.yml` — is present on the box. Production stays RDS-backed only because the box runs a bare `docker compose up -d`, which loads `docker-compose.yml` alone; Compose would auto-merge the local file only if it were named `docker-compose.override.yml`. That is exactly the bug the rename fixed, so don't rename it back.
 - The EC2 deploy directory needs to be an actual git clone of this repo so `git pull` picks up changes to `docker-compose.yml`/`nginx/`, not just new backend code.
 - `./.env` on the EC2 box itself is not part of the repo and isn't touched by `git pull` — its `DATABASE_URL` (the RDS connection string) is set once, by hand, on that box.
 

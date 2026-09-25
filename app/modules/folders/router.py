@@ -12,7 +12,7 @@ from ...db.postgres import get_db
 from ...modules.public.schemas import PublicFolderSummary
 from ...shared.dependencies import get_current_user
 from . import service
-from .schemas import FolderCreate, FolderOut, FolderPublishUpdate
+from .schemas import FolderCreate, FolderOut, FolderPublishUpdate, FolderRename
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
 
@@ -27,6 +27,16 @@ async def create_folder(
     payload: FolderCreate, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     return await service.create_folder(db, current_user["_id"], payload.path)
+
+
+@router.patch("/{path:path}/rename", status_code=200)
+async def rename_folder(
+    path: str,
+    payload: FolderRename,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await service.rename_folder(db, current_user["_id"], path, payload.new_name)
 
 
 @router.delete("/{path:path}", status_code=200)

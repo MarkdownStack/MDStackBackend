@@ -11,6 +11,8 @@ Relationships, at a glance:
     Note 1---* Comment
     User 1---* Comment           (the commenter's real account — no
                                    anonymous/free-typed authors)
+    User 1---* SlugRedirect      (owner-scoped custom short URLs for
+                                   published notes and folders)
 
 Primary keys are UUIDs (`uuid4`, stored as native Postgres UUID) rather
 than auto-increment integers, deliberately: the old Mongo `ObjectId`
@@ -100,6 +102,7 @@ class User(Base):
     notes: Mapped[list["Note"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     tags: Mapped[list["Tag"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     comments: Mapped[list["Comment"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    slugs: Mapped[list["SlugRedirect"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
 
 
 class UserPreferences(Base):
@@ -354,3 +357,59 @@ class RequestStat(Base):
     # column is the direct Postgres equivalent of "a small nested object
     # that isn't worth its own table".
     methods: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+# ---------------------------------------------------------------------------
+# slug_redirects — custom short URLs for published notes and folders
+# ---------------------------------------------------------------------------
+
+
+class SlugRedirect(Base):
+    """A user-chosen short slug (e.g. "python-oop-concepts") that resolves
+    to either a published note or a published folder. Slugs are globally
+    unique across all users — two accounts cannot claim the same slug, and
+    the resolution endpoint is unauthenticated (it has to be, since it's a
+    public URL). Owner-scoped in the sense that only the note/folder owner
+    can set or change the slug for their own content; the global uniqueness
+    constraint is what prevents squatting on another user's slug.
+
+    `target_type` is either "note" or "folder" — kept as a plain string
+    rather than a Postgres enum so adding a third type later (e.g. a tag
+    page) is a code change only, not a schema migration.
+
+    A note or folder can have at most one active slug (enforced by the
+    unique constraint on (target_type, target_id)). Changing the slug
+    replaces the row in-place (upsert in service.py); the old slug is
+    immediately gone, not kept as a redirect, so links using the previous
+    slug 404. This is intentional: we're not a link-management SaaS, just
+    a vanity-URL picker that makes sharing nicer.
+    """
+
+    __tablename__ = "slug_redirects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_new_uuid)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # URL-safe slug: lowercase letters, digits, hyphens only, 3–80 chars.
+    # Validated in schemas.py; stored as-is (already lowercased by the
+    # validator so lookups are a plain equality check, not LOWER()).
+    slug: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    # "note" | "folder"
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The UUID of the note or folder this slug points at. Not a real FK
+    # because it could point to either the `notes` or `folders` table —
+    # enforced at the service layer (the target must be published and
+    # belong to the owner) rather than at the DB level.
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    owner: Mapped["User"] = relationship(back_populates="slugs")
+
+    __table_args__ = (
+        # One slug per (type, target) — a note can't have two slugs at once.
+        UniqueConstraint("target_type", "target_id", name="uq_slug_target"),
+        Index("ix_slug_redirects_slug", "slug"),
+        Index("ix_slug_redirects_owner", "owner_id"),
+    )

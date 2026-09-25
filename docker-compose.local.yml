@@ -1,12 +1,25 @@
 # Local development only. docker-compose.yml as committed no longer runs a
 # Postgres container at all — production points DATABASE_URL at a managed
 # instance instead (AWS RDS — see .env.example) — so local dev's own
-# Postgres container lives entirely here now. This file is never deployed
-# (.github/workflows/deploy_ec2.yaml only copies docker-compose.yml itself),
-# so nothing here reaches production.
+# Postgres container lives entirely here now.
 #
-# Compose merges this automatically alongside docker-compose.yml whenever
-# you run `docker compose up ...` from this directory.
+# NAMED .local.yml, NOT .override.yml, AND THAT MATTERS. Compose
+# auto-merges a file named exactly docker-compose.override.yml with no
+# flags at all. This file IS committed, and deploy_ec2.yaml deploys by
+# `git reset --hard origin/master` — so under the old name it landed on
+# EC2 and the plain `docker compose up -d` there silently merged it,
+# which meant production ran a local Postgres container, had its
+# DATABASE_URL overridden away from RDS, published the API past nginx,
+# and (with the workflow's --build) rebuilt the image on the box. The
+# rename is the fix: Compose will not pick this up implicitly, so a bare
+# `docker compose up` — which is what EC2 runs — sees only
+# docker-compose.yml.
+#
+# Locally, name it explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+# Or set COMPOSE_FILE in your own .env (gitignored, so it never reaches a
+# deployed box) to get bare `docker compose up` back:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.local.yml
 services:
   # Same image/credentials docker-compose.yml's `postgres` service used to
   # ship before the move to a managed instance — moved here rather than
@@ -35,8 +48,9 @@ services:
     # Build from the local Dockerfile instead of pulling the CI-built image
     # docker-compose.yml names. Compose merges this on top of that file's
     # `image:` line, so the locally-built result just gets tagged with that
-    # same name — and because this override file is never deployed,
-    # production still pulls the pre-built image from Docker Hub untouched.
+    # same name. Production is unaffected only because this file is never
+    # named on a deployed box's command line (see the header) — not because
+    # of anything in the deploy workflow, which copies every tracked file.
     #
     # Why bother: local dev should run the code in your working tree, not
     # whatever CI last pushed to `latest` from master — and pulling that
@@ -48,23 +62,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # Only takes effect if you run the *full* stack locally with
-    # `docker compose up` (backend included, not just `docker compose up
-    # postgres`) — points the containerized backend at this containerized
-    # Postgres over the compose network's own DNS, since "localhost" inside
-    # the backend container would mean itself, not this postgres container.
-    # Running backend outside Docker instead just uses .env.example's
-    # localhost:5432 default against the published port above.
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://mdstack:mdstack@postgres:5432/mdstack
+    # .env.local is loaded after .env (declared in docker-compose.yml's
+    # env_file:) so its DATABASE_URL wins — pointing the containerized
+    # backend at the postgres container over the compose network's own DNS
+    # instead of localhost, which inside a container means itself.
+    # Compose merges env_file lists when -f is used, in document order,
+    # later entries winning on conflict — that's what makes this work.
+    env_file:
+      - ./.env
     depends_on:
       - postgres
     # Published to the host for the same reason as postgres above — hit it
     # directly at localhost:8000 while developing, without needing nginx
     # (which isn't part of this local stack at all) in front of it.
     # docker-compose.yml deliberately leaves this unpublished in production
-    # (nginx is the only public entrypoint there); this override-only file
-    # is never deployed, so that stays true regardless of what's added here.
+    # (nginx is the only public entrypoint there), and that stays true so
+    # long as this file is only ever passed explicitly with -f locally.
     ports:
       - "8000:8000"
 
