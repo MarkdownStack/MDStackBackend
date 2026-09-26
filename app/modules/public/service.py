@@ -56,6 +56,19 @@ async def get_public_note_or_404(db: AsyncSession, note_id: str) -> Note:
     return note
 
 
+async def get_commentable_note_or_404(db: AsyncSession, note_id: str) -> Note:
+    """Like get_public_note_or_404 but also accepts notes that live inside
+    a published folder — those notes don't need is_public=True themselves
+    to be readable and commentable, they just need to be inside a
+    published folder's subtree. Used by comments/service.py instead of
+    get_public_note_or_404 so that folder-scoped notes can be commented on."""
+    note_uuid = parse_uuid(note_id, NotFoundError("Note not found"))
+    note = await repository.find_public_or_folder_note(db, note_uuid)
+    if not note:
+        raise NotFoundError("Note not found")
+    return note
+
+
 async def get_public_folder_or_404(db: AsyncSession, folder_id: str):
     """Mirrors get_public_note_or_404 above: 404s (never 403) whether the
     folder doesn't exist, isn't published, or folder_id isn't a valid id

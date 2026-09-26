@@ -81,6 +81,12 @@ class User(Base):
     password_reset_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     password_reset_token_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Subscription flag — false for every new account, flipped to true
+    # when the user obtains a Pro plan. Gates the AI chat feature on the
+    # frontend (see AIChatDialog / VaultShell). The billing/payment flow
+    # that sets this to true is a future feature; for now it can only be
+    # toggled manually (e.g. via the admin dashboard or a direct DB update).
+    is_subscribed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # No `onupdate=func.now()` here deliberately: with an async session, a
     # server-computed onupdate value comes back "expired" after an UPDATE
     # and needs an extra round trip (session.refresh()) before it can be

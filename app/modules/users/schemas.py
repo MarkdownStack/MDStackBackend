@@ -25,6 +25,7 @@ class UserOut(BaseModel):
     username: str = ""
     email: str
     is_verified: bool = False
+    is_subscribed: bool = False
     # Computed from Settings.admin_email_set (see shared/dependencies.py),
     # not stored — lets the frontend show/hide admin-only UI (the admin
     # dashboard entry in SettingsMenu) without guessing, while the actual

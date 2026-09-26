@@ -31,6 +31,36 @@ async def upvote(session: AsyncSession, comment_id: uuid.UUID, note_id: uuid.UUI
     return comment
 
 
+async def update_content(session: AsyncSession, comment_id: uuid.UUID, owner_id: uuid.UUID, content: str) -> Comment | None:
+    """Update a comment's content — scoped to owner_id so a user can never
+    edit someone else's comment even if they somehow know the comment_id."""
+    from datetime import datetime, timezone
+    result = await session.execute(
+        select(Comment).where(Comment.id == comment_id, Comment.owner_id == owner_id)
+    )
+    comment = result.scalar_one_or_none()
+    if comment is None:
+        return None
+    comment.content = content
+    comment.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+    return comment
+
+
+async def delete(session: AsyncSession, comment_id: uuid.UUID, owner_id: uuid.UUID) -> bool:
+    """Delete a comment — scoped to owner_id so a user can never delete
+    someone else's comment. Returns True if something was deleted."""
+    result = await session.execute(
+        select(Comment).where(Comment.id == comment_id, Comment.owner_id == owner_id)
+    )
+    comment = result.scalar_one_or_none()
+    if comment is None:
+        return False
+    await session.delete(comment)
+    await session.flush()
+    return True
+
+
 async def counts_for_notes(session: AsyncSession, note_ids: list[str]) -> dict[str, int]:
     """Batch note_id (str) -> comment count in one query, instead of one
     round trip per note in a list — used by the anonymous Explore feed

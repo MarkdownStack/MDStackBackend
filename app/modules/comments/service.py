@@ -21,15 +21,20 @@ from ...modules.users.repository import authors_by_owner_id
 from ...shared.ids import parse_uuid
 from . import repository
 from .models import to_comment_out
-from .schemas import CommentCreate, CommentOut
+from .schemas import CommentCreate, CommentOut, CommentUpdate
+
+# Alias for readability — every comment operation gates on this instead of
+# get_public_note_or_404 so that notes inside a published folder (whose own
+# is_public flag may still be False) are commentable too.
+_get_note = public_service.get_commentable_note_or_404
 
 
-async def list_comments(db: AsyncSession, note_id: str) -> list[CommentOut]:
-    note = await public_service.get_public_note_or_404(db, note_id)  # 404s if not a published note
+async def list_comments(db: AsyncSession, note_id: str, current_user_id: uuid.UUID | None = None) -> list[CommentOut]:
+    note = await _get_note(db, note_id)
     comments = await repository.list_by_note(db, note.id)
     owner_ids = {str(c.owner_id) for c in comments if c.owner_id}
     authors = await authors_by_owner_id(db, owner_ids)
-    return [to_comment_out(c, authors.get(str(c.owner_id), "Someone")) for c in comments]
+    return [to_comment_out(c, authors.get(str(c.owner_id), "Someone"), current_user_id) for c in comments]
 
 
 async def create_comment(db: AsyncSession, note_id: str, owner_id: uuid.UUID, payload: CommentCreate) -> CommentOut:
@@ -37,16 +42,36 @@ async def create_comment(db: AsyncSession, note_id: str, owner_id: uuid.UUID, pa
     tied to the commenter's real identity (resolved the same way a note's
     author is, from their account email) rather than a free-typed name, so
     there's no anonymous impersonation in a note's comment thread."""
-    note = await public_service.get_public_note_or_404(db, note_id)  # 404s if not a published note
+    note = await _get_note(db, note_id)
     comment = Comment(note_id=note.id, owner_id=owner_id, content=payload.content.strip(), upvotes=0)
     await repository.insert(db, comment)
     owner_id_str = str(owner_id)
     authors = await authors_by_owner_id(db, {owner_id_str})
-    return to_comment_out(comment, authors.get(owner_id_str, "Someone"))
+    return to_comment_out(comment, authors.get(owner_id_str, "Someone"), owner_id)
+
+
+async def update_comment(db: AsyncSession, note_id: str, comment_id: str, owner_id: uuid.UUID, payload: CommentUpdate) -> CommentOut:
+    # Gate: note must be publicly accessible (individually published or in a published folder).
+    await _get_note(db, note_id)
+    comment_uuid = parse_uuid(comment_id, NotFoundError("Comment not found"))
+    updated = await repository.update_content(db, comment_uuid, owner_id, payload.content.strip())
+    if not updated:
+        raise NotFoundError("Comment not found")
+    owner_id_str = str(owner_id)
+    authors = await authors_by_owner_id(db, {owner_id_str})
+    return to_comment_out(updated, authors.get(owner_id_str, "Someone"), owner_id)
+
+
+async def delete_comment(db: AsyncSession, note_id: str, comment_id: str, owner_id: uuid.UUID) -> None:
+    await _get_note(db, note_id)
+    comment_uuid = parse_uuid(comment_id, NotFoundError("Comment not found"))
+    deleted = await repository.delete(db, comment_uuid, owner_id)
+    if not deleted:
+        raise NotFoundError("Comment not found")
 
 
 async def upvote_comment(db: AsyncSession, note_id: str, comment_id: str) -> CommentOut:
-    note = await public_service.get_public_note_or_404(db, note_id)  # 404s if not a published note
+    note = await _get_note(db, note_id)
     comment_uuid = parse_uuid(comment_id, NotFoundError("Comment not found"))
 
     updated = await repository.upvote(db, comment_uuid, note.id)

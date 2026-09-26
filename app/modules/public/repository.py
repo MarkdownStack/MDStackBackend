@@ -19,6 +19,47 @@ from ...db.models import Comment, Folder, Note
 from ...shared.paths import folder_scope_clause
 
 
+async def find_public_or_folder_note(session: AsyncSession, note_id: uuid.UUID) -> Note | None:
+    """Find a note that is either individually published (is_public=True)
+    OR lives inside a published folder — both make it commentable.
+    Used by comments/service.py as the gate for posting/reading comments
+    on folder-scoped notes whose own is_public flag is still False."""
+    # First try the cheap path: individually published.
+    result = await session.execute(
+        select(Note).options(selectinload(Note.tags)).where(Note.id == note_id, Note.is_public.is_(True))
+    )
+    note = result.scalar_one_or_none()
+    if note:
+        return note
+
+    # Not individually published — check whether it lives inside any
+    # published folder belonging to its owner. We fetch the note first
+    # (without the is_public constraint) and then check the folder table.
+    result = await session.execute(
+        select(Note).options(selectinload(Note.tags)).where(Note.id == note_id)
+    )
+    note = result.scalar_one_or_none()
+    if not note:
+        return None
+
+    # Does any published folder owned by the same user cover this note's path?
+    # We can't use folder_scope_clause here (it scopes a column to a fixed
+    # path string, not the other way around), so we fetch all published
+    # folders for this owner and check path_in_scope in Python. A user
+    # rarely has more than a handful of published folders so this is fine.
+    from ...shared.paths import path_in_scope
+    folder_result = await session.execute(
+        select(Folder.path).where(
+            Folder.owner_id == note.owner_id,
+            Folder.is_public.is_(True),
+        )
+    )
+    published_folder_paths = folder_result.scalars().all()
+    if any(path_in_scope(note.folder_path, fp) for fp in published_folder_paths):
+        return note
+    return None
+
+
 async def find_public_note(session: AsyncSession, note_id: uuid.UUID) -> Note | None:
     result = await session.execute(
         select(Note).options(selectinload(Note.tags)).where(Note.id == note_id, Note.is_public.is_(True))
